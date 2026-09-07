@@ -10,6 +10,7 @@ __pycache__/
 *.pid
 logs/
 runtime/
+runtime/codex-workdir/config/
 .qoder/*
 !.qoder/AGENTS.md
 !.qoder/hooks/

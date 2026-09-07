@@ -24,7 +24,7 @@ from core.agent.types import BackendClient
 from core.codex.client import CodexClientCancelled
 from core.session.daily_scheduler import DailyTaskScheduler
 from core.session.deduplicator import MessageDeduplicator
-from core.session.manager import SessionManager
+from core.session.manager import SessionManager, apply_pending_notices, format_file_notice
 from core.session.message_queue import SessionMessageQueue
 from core.session.task_registry import ActiveTaskRegistry
 
@@ -34,12 +34,20 @@ WECHAT_HELP_TEXT = build_help_text(include_remind=False)
 
 
 @dataclass(slots=True)
+class WeChatFileAttachment:
+    name: str
+    path: str
+    size: int = 0
+
+
+@dataclass(slots=True)
 class WeChatTextMessageEvent:
     message_id: str
     account_id: str
     user_id: str
     text: str
     context_token: str = ""
+    files: tuple[WeChatFileAttachment, ...] = ()
 
 
 class WeChatWebhookHandler:
@@ -81,6 +89,22 @@ class WeChatWebhookHandler:
 
         session_key = self._build_session_key(event)
         normalized_text = event.text.strip().lower()
+
+        for attachment in event.files:
+            self._sessions.note_incoming_file(
+                session_key,
+                format_file_notice(attachment.name, attachment.path, attachment.size),
+            )
+        if event.files:
+            logger.info(
+                "wechat inbound files queued",
+                extra={"trace_id": trace_id, "event": "wechat.file_archive", "count": len(event.files)},
+            )
+            # The sidecar already replied 已收藏, and a file-only message must not
+            # wake the agent or it will read the file unprompted. When text
+            # accompanies the files, fall through and let the notices ride it.
+            if not event.text:
+                return []
 
         if normalized_text == "/stop":
             dropped = await self._message_queue.clear(session_key)
@@ -153,7 +177,6 @@ class WeChatWebhookHandler:
 
     async def _run_llm_job(self, event: WeChatTextMessageEvent, session_key: str, trace_id: str) -> list[str]:
         history_messages = self._sessions.build_messages(session_key)
-        messages = history_messages + [{"role": "user", "content": event.text}]
 
         started = self._task_registry.start(
             key=session_key,
@@ -163,6 +186,11 @@ class WeChatWebhookHandler:
         )
         if not started:
             return self._split_reply("当前已有任务在运行中。发送 /stop 可强制终止后再试。")
+
+        # Drain only once the turn is committed, so a rejected turn keeps the
+        # notices queued for the next one.
+        user_text = apply_pending_notices(event.text, self._sessions.take_pending_files(session_key))
+        messages = history_messages + [{"role": "user", "content": user_text}]
 
         try:
             if self._settings.streaming_enabled:
@@ -179,7 +207,7 @@ class WeChatWebhookHandler:
 
             if not answer.strip():
                 answer = "(空响应)"
-            self._sessions.append_round(key=session_key, user=event.text, assistant=answer)
+            self._sessions.append_round(key=session_key, user=user_text, assistant=answer)
             return self._split_reply(answer)
         except CodexClientCancelled:
             logger.info("wechat message cancelled by user", extra={"trace_id": trace_id, "event": "wechat.cancel"})
@@ -215,16 +243,39 @@ class WeChatWebhookHandler:
         return payload
 
     @staticmethod
+    def _parse_files(payload: dict[str, Any]) -> tuple[WeChatFileAttachment, ...]:
+        raw_files = payload.get("files")
+        if not isinstance(raw_files, list):
+            return ()
+
+        attachments: list[WeChatFileAttachment] = []
+        for entry in raw_files:
+            if not isinstance(entry, dict):
+                continue
+            path = str(entry.get("path") or "").strip()
+            if not path:
+                continue
+            try:
+                size = max(0, int(entry.get("size") or 0))
+            except (TypeError, ValueError):
+                size = 0
+            attachments.append(
+                WeChatFileAttachment(name=str(entry.get("name") or "").strip(), path=path, size=size)
+            )
+        return tuple(attachments)
+
+    @staticmethod
     def _parse_event(payload: dict[str, Any]) -> WeChatTextMessageEvent:
         message_id = str(payload.get("message_id", "") or payload.get("client_id", "")).strip()
         account_id = str(payload.get("account_id", "")).strip()
         user_id = str(payload.get("user_id", "") or payload.get("from_user_id", "")).strip()
         text = str(payload.get("text", "")).strip()
         context_token = str(payload.get("context_token", "")).strip()
+        files = WeChatWebhookHandler._parse_files(payload)
 
         if not message_id or not account_id or not user_id:
             raise HTTPException(status_code=400, detail="missing wechat message identity")
-        if not text:
+        if not text and not files:
             raise HTTPException(status_code=400, detail="missing wechat text")
 
         return WeChatTextMessageEvent(
@@ -233,6 +284,7 @@ class WeChatWebhookHandler:
             user_id=user_id,
             text=text,
             context_token=context_token,
+            files=files,
         )
 
     @staticmethod

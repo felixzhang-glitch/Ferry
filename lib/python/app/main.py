@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
+import uuid
+from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
@@ -26,7 +30,7 @@ settings = get_settings()
 setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="codeClaw", version="0.6.0")
+app = FastAPI(title="codeClaw", version="0.7.0")
 
 session_manager = SessionManager(max_history_rounds=settings.max_history_rounds)
 deduplicator = MessageDeduplicator(ttl_seconds=settings.deduplicate_ttl_seconds)
@@ -141,6 +145,116 @@ async def wechat_webhook(request: Request) -> JSONResponse:
         else:
             logger.warning("wechat webhook rejected: %s", detail)
         return JSONResponse(status_code=status, content={"code": status, "msg": detail})
+
+
+def _feishu_receive_id_type(receive_id: str) -> str:
+    if receive_id.startswith("ou_"):
+        return "open_id"
+    if receive_id.startswith("on_"):
+        return "union_id"
+    return "chat_id"
+
+
+async def _push_file_to_wechat(to: str, file_path: str, caption: str) -> dict[str, Any]:
+    base_url = settings.wechat_sidecar_base_url.rstrip("/")
+    # Encrypting plus CDN transfer far exceeds the text-push timeout.
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        if caption:
+            caption_response = await client.post(f"{base_url}/send", json={"to": to, "text": caption})
+            caption_response.raise_for_status()
+        response = await client.post(f"{base_url}/send_file", json={"to": to, "path": file_path})
+    if response.status_code != 200:
+        raise RuntimeError(f"wechat sidecar {response.status_code}: {response.text[:300]}")
+    payload = response.json()
+    return payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else {}
+
+
+@app.post("/push/file")
+async def push_file(request: Request) -> JSONResponse:
+    """Deliver a local file to a feishu or wechat conversation."""
+    trace_id = uuid.uuid4().hex
+    expected_token = settings.push_api_token.strip()
+    if not expected_token:
+        return JSONResponse(
+            status_code=503,
+            content={"code": 503, "msg": "push api disabled: PUSH_API_TOKEN is not configured"},
+        )
+    supplied_auth = request.headers.get("authorization", "")
+    # compare_digest on str rejects non-ASCII, so compare encoded bytes.
+    if not hmac.compare_digest(supplied_auth.encode("utf-8"), f"Bearer {expected_token}".encode("utf-8")):
+        return JSONResponse(status_code=401, content={"code": 401, "msg": "invalid push token"})
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"code": 400, "msg": "invalid json body"})
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"code": 400, "msg": "body must be a json object"})
+
+    channel = str(payload.get("channel") or "").strip().lower()
+    to = str(payload.get("to") or "").strip()
+    file_path = str(payload.get("path") or payload.get("file") or "").strip()
+    caption = str(payload.get("caption") or payload.get("text") or "").strip()
+
+    if channel not in {"feishu", "wechat"}:
+        return JSONResponse(status_code=400, content={"code": 400, "msg": "channel must be feishu or wechat"})
+    if not to or not file_path:
+        return JSONResponse(status_code=400, content={"code": 400, "msg": "missing to/path"})
+
+    candidate = Path(file_path).expanduser()
+    if not candidate.is_file():
+        return JSONResponse(status_code=404, content={"code": 404, "msg": f"file not found: {file_path}"})
+    size = candidate.stat().st_size
+    if size == 0:
+        return JSONResponse(status_code=400, content={"code": 400, "msg": "refusing to send an empty file"})
+    max_bytes = int(settings.push_file_max_mb) * 1024 * 1024
+    if size > max_bytes:
+        return JSONResponse(
+            status_code=413,
+            content={"code": 413, "msg": f"file too large: {size} bytes exceeds limit {max_bytes}"},
+        )
+
+    logger.info(
+        "pushing file",
+        extra={"trace_id": trace_id, "event": "push.file", "channel": channel, "path": str(candidate), "size": size},
+    )
+    try:
+        if channel == "feishu":
+            receive_id_type = str(payload.get("receive_id_type") or "").strip() or _feishu_receive_id_type(to)
+            if caption:
+                await feishu_client.send_text(
+                    receive_id=to,
+                    text=caption,
+                    trace_id=trace_id,
+                    receive_id_type=receive_id_type,
+                )
+            file_key = await feishu_client.upload_file(str(candidate), trace_id=trace_id)
+            message_id = await feishu_client.send_file(
+                receive_id=to,
+                file_key=file_key,
+                trace_id=trace_id,
+                receive_id_type=receive_id_type,
+                request_uuid=trace_id,
+            )
+            result: dict[str, Any] = {"channel": channel, "file_key": file_key, "message_id": message_id}
+        else:
+            result = {"channel": channel, **await _push_file_to_wechat(to, str(candidate), caption)}
+        result["size"] = size
+    except FeishuClientError as exc:
+        logger.warning(
+            "push file failed",
+            extra={"trace_id": trace_id, "event": "push.file", "channel": channel, "error": str(exc)[:300]},
+        )
+        return JSONResponse(status_code=502, content={"code": 502, "msg": str(exc)[:300]})
+    except Exception as exc:
+        logger.exception("push file failed", extra={"trace_id": trace_id, "event": "push.file", "channel": channel})
+        return JSONResponse(status_code=502, content={"code": 502, "msg": str(exc)[:300]})
+
+    logger.info(
+        "push file succeeded",
+        extra={"trace_id": trace_id, "event": "push.file", "channel": channel, "size": size},
+    )
+    return JSONResponse(content={"code": 0, "data": result})
 
 
 @app.on_event("startup")

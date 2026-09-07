@@ -3,6 +3,29 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-09-07 · v0.7.0 · 双向文件通道打通 + 入站文件进会话
+
+- **需求**：用户要求「从微信/飞书让 codeClaw 把一个文件发出来」。实测飞书成功、微信失败，排查后确认飞书那次是 agent 绕过 codeClaw 自己 curl OpenAPI 成的（codeClaw 自身两个渠道都发不了文件），微信则是 sidecar 出站只有文本
+- **微信出站文件**：`wechat-sidecar.mjs` 补齐 iLink 官方四步链路 —— `getuploadurl`(`media_type=3`) → AES-128-ECB 加密 → **POST** 密文到 `novac2c.cdn.weixin.qq.com/c2c/upload`（下载凭证在响应头 `x-encrypted-param`，不在 body）→ `sendmessage` 发 `type:4` file_item。新增 `POST /send_file` 路由
+  - 协议依据：腾讯官方 npm 包 `@tencent-weixin/openclaw-weixin` v2.4.8 的 `messaging/send.js`、`cdn/upload.js`、`api/api.js`，逐字段对齐
+  - 三个易错点已写进代码注释与 `docs/channels.md`：`sendmessage` 的 `type` 是 **4**（MessageItemType.FILE）而 `getuploadurl` 的 `media_type` 是 **3**（UploadMediaType.FILE），两个枚举数值不同；`aes_key` 是 base64 包裹的 **hex 字符串**（与入站解密侧对称）；`len` 是明文字节数的字符串
+  - AES-ECB 是 iLink CDN 线格式强制的，不是本地选型，代码里注明禁止"升级"成 GCM
+- **飞书原生发文件**：`client.py` 新增 `upload_file`（`im/v1/files`，`file_type` 按扩展名映射 pdf/doc/xls/ppt，其余 `stream`；mp4/opus 刻意不映射，因为那两个还要求 `duration` 字段）+ `send_file`（`msg_type:file`）。此前 agent 只能自己读 `conf/.env` 里的凭据手搓 multipart
+- **统一入口 `POST /push/file`**：`{channel, to, path, caption?}` 一个接口管两个渠道，agent 只需学一次。飞书 `receive_id_type` 按 `ou_`/`on_`/`oc_` 前缀自动识别。`caption` 先于文件发出
+  - **安全**：服务绑 `0.0.0.0` 且机器在公网，一个能把任意本地文件发到指定会话的接口不能裸奔，故强制 `PUSH_API_TOKEN`（`hmac.compare_digest` 比对，编码成 bytes 以免非 ASCII 头退化成 500）；未配置直接 503 关闭，不降级为免鉴权
+  - 错误分档：400 参数/空文件、401 令牌、404 文件不存在、413 超限、502 上游失败、503 未配置
+- **入站文件进会话**（本次核心缺陷）：两个渠道此前都是「归档 → 回执 → 提前 return」，而 `append_round` 全仓 3 个调用点都在 `_run_llm_job` 内，文件消息永远到不了，agent 完全不知道用户发过文件，用户只能自己把归档路径粘回对话
+  - **为什么不能直接写 `append_round`**：pi 用原生 session，`_build_native_prompt` 只取最后一条 user 消息，其余历史在 pi 自己的 session 文件里，写进 codeClaw 的 `rounds` 对 pi 后端完全无效
+  - **改为通知队列**：`SessionManager.pending_files` + `note_incoming_file`/`take_pending_files`，归档时排队、用户下次开口时由 `apply_pending_notices` 注入该轮 user 文本，对所有后端一致生效
+  - **到达时刻意不唤醒 agent**：唤醒即意味着它会去读文件；用户发个文件存档不该被自动展开分析（白烧一次配额）。通知头部写明「仅当本轮确实需要时才读取」
+  - 边界：文件+文字同发合并为一轮（微信此前会直接丢掉文字）；纯文件消息不跑 LLM、webhook 返回空 `replies`；任务被拒时不 drain，留给下一轮；命令轮不消费通知；归档失败不排通知；队列上限 20；`/new` `/reset` 清空；内存态，重启丢失
+- **缺陷修复：微信入站图片被静默丢弃** —— `firstText` 只认 type 1/3，`collectFileItems` 只认 type 4/5，**type 2 两边都不管**，用户发图片给 bot 得到彻底沉默。现已纳入归档（`image_item` 解析链 + `.jpg` 兜底名）
+- **安全修复：日志明文泄露文件解密密钥** —— `archiveFileItem` 曾把完整 raw item 打进日志，`encrypt_query_param` + `aes_key` 齐备即可从微信 CDN 下载并解密原文件；日志还是 644 全局可读。改为 `describeFileItem`：**保留字段名**（当初打日志就是为了校准 iLink schema，这个用途不丢）、掩掉凭证值，实测 2000 字符降到 371
+  - **umask 绕了两道弯**：先在 `[supervisord]` 加 `umask=077` 无效 —— 查源码发现 `os.umask()` 只在 `_daemonize()` 里调用，而 supervisord 以 `-n` 运行，那段代码永不执行，属死配置，已回滚。正确层级是 systemd drop-in `/etc/systemd/system/supervisor.service.d/umask.conf` 的 `UMask=0077`，日志与其轮转产物均为 600
+- **验证**：微信实发 txt + 中文文件名 txt 均 `code:0`；飞书实发拿到 `file_key`/`message_id`；404/401/400/413 实机分档正确；入站真机跑通（发文件 → `chunks=0` 不唤醒 → 问「我上一句是啥」时 agent prompt 里含通知且答对）；脱敏后日志正则扫不到任何凭证值。`pytest` 276 passed（新增 75）、`node --test` 16 passed（新增 16，仓库首次引入 JS 测试，用 Node 内置 runner 不加依赖）
+- 影响：`lib/js/wechat-sidecar.mjs`、`lib/python/channel/feishu/{client,handler}.py`、`lib/python/channel/wechat/handler.py`、`lib/python/core/session/manager.py`、`lib/python/app/{main,config}.py`、`conf/.env`（新增 `PUSH_API_TOKEN`/`PUSH_FILE_MAX_MB`，权限收 600）、`conf/.env.example`、`rules/AGENTS.md`、`docs/{channels,functional-tests}.md`、`README.md`、4 个新测试文件；仓外 `/etc/systemd/system/supervisor.service.d/umask.conf`（新增）。上线需 `systemctl restart supervisor`
+- **遗留**：出站图片/视频/语音（`type` 2/5/3）未做，CDN 链路可复用但图片还需缩略图字段；`pending_files` 未持久化；百炼 429 配额耗尽时回复被截断成「服务繁忙」是独立问题，未动
+
 ## 2026-08-19 · pi 升级 0.84.2 + 1M 上下文与 80% 压缩阈值
 
 - **需求**：把 pi 升到最新稳定版，并把上下文窗口拉到 1M、自动压缩阈值改为窗口的 80%

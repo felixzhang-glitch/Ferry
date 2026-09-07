@@ -20,6 +20,24 @@ class FeishuClientError(RuntimeError):
     pass
 
 
+# Feishu's file_type enum. mp4/opus are deliberately absent: they additionally
+# require a duration field, and "stream" delivers them fine without it.
+FILE_TYPE_BY_SUFFIX = {
+    ".pdf": "pdf",
+    ".doc": "doc",
+    ".docx": "doc",
+    ".xls": "xls",
+    ".xlsx": "xls",
+    ".ppt": "ppt",
+    ".pptx": "ppt",
+}
+DEFAULT_FILE_TYPE = "stream"
+
+
+def resolve_feishu_file_type(file_name: str) -> str:
+    return FILE_TYPE_BY_SUFFIX.get(Path(file_name).suffix.lower(), DEFAULT_FILE_TYPE)
+
+
 class FeishuClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -366,6 +384,113 @@ class FeishuClient:
         )
         return image_key
 
+    async def upload_file(self, file_path: str, trace_id: str) -> str:
+        path = Path(file_path).expanduser()
+        if not path.is_file():
+            raise FeishuClientError(f"file not found: {file_path}")
+
+        size = path.stat().st_size
+        if size == 0:
+            raise FeishuClientError(f"refusing to upload an empty file: {file_path}")
+        max_bytes = int(self._settings.push_file_max_mb) * 1024 * 1024
+        if size > max_bytes:
+            raise FeishuClientError(f"file too large: {size} bytes exceeds limit {max_bytes}")
+
+        content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        file_type = resolve_feishu_file_type(path.name)
+        with path.open("rb") as upload_handle:
+            response, data = await self._post_authenticated_multipart(
+                url=self._settings.feishu_file_upload_url,
+                data={"file_type": file_type, "file_name": path.name},
+                files={"file": (path.name, upload_handle, content_type)},
+                trace_id=trace_id,
+                event="feishu.upload_file",
+                # The shared client timeout is tuned for small JSON calls.
+                timeout=120.0,
+            )
+
+        if data.get("code") != 0:
+            logger.error(
+                "feishu file upload failed",
+                extra={
+                    "trace_id": trace_id,
+                    "event": "feishu.upload_file",
+                    "status_code": response.status_code,
+                    "error_code": data.get("code"),
+                },
+            )
+            raise FeishuClientError(f"feishu file upload failed: {data}")
+
+        payload = data.get("data")
+        if not isinstance(payload, dict):
+            raise FeishuClientError("missing file upload data")
+        file_key = payload.get("file_key")
+        if not isinstance(file_key, str) or not file_key:
+            raise FeishuClientError("missing file_key in upload response")
+
+        logger.info(
+            "feishu file uploaded",
+            extra={
+                "trace_id": trace_id,
+                "event": "feishu.upload_file",
+                "status_code": response.status_code,
+                "file_type": file_type,
+                "size": size,
+            },
+        )
+        return file_key
+
+    async def send_file(
+        self,
+        receive_id: str,
+        file_key: str,
+        trace_id: str,
+        receive_id_type: str = "chat_id",
+        request_uuid: str | None = None,
+    ) -> str:
+        if not file_key:
+            return ""
+
+        params = {"receive_id_type": receive_id_type}
+        payload: dict[str, Any] = {
+            "receive_id": receive_id,
+            "msg_type": "file",
+            "content": json.dumps({"file_key": file_key}, ensure_ascii=False),
+        }
+        if request_uuid:
+            payload["uuid"] = request_uuid
+
+        response, data = await self._post_authenticated_json(
+            url=self._settings.feishu_send_message_url,
+            payload=payload,
+            trace_id=trace_id,
+            event="feishu.send_file",
+            params=params,
+        )
+        if data.get("code") != 0:
+            logger.error(
+                "feishu file send failed",
+                extra={
+                    "trace_id": trace_id,
+                    "event": "feishu.send_file",
+                    "status_code": response.status_code,
+                    "error_code": data.get("code"),
+                },
+            )
+            raise FeishuClientError(f"feishu file send failed: {data}")
+
+        logger.info(
+            "feishu file sent",
+            extra={"trace_id": trace_id, "event": "feishu.send_file", "status_code": response.status_code},
+        )
+
+        message = data.get("data")
+        if isinstance(message, dict):
+            message_id = message.get("message_id")
+            if isinstance(message_id, str):
+                return message_id
+        return ""
+
     async def download_message_image(self, message_id: str, image_key: str, trace_id: str) -> tuple[bytes, str]:
         if not message_id or not image_key:
             raise FeishuClientError("message_id and image_key are required")
@@ -558,9 +683,12 @@ class FeishuClient:
         files: dict[str, Any],
         trace_id: str,
         event: str,
+        timeout: float | None = None,
     ) -> tuple[httpx.Response, dict[str, Any]]:
         attempts = self._retry_attempts()
         last_error: Exception | None = None
+        # httpx reads an explicit None as "no timeout", not "client default".
+        timeout_kwargs: dict[str, Any] = {"timeout": timeout} if timeout is not None else {}
 
         for attempt in range(attempts + 1):
             token = await self._get_tenant_access_token(trace_id=trace_id)
@@ -571,6 +699,7 @@ class FeishuClient:
                     headers={"Authorization": f"Bearer {token}"},
                     data=data,
                     files=files,
+                    **timeout_kwargs,
                 )
                 data_json = self._parse_response(response)
             except (httpx.RequestError, FeishuClientError) as exc:

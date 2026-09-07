@@ -38,7 +38,7 @@ from core.agent.types import BackendClient
 from core.codex.client import CodexClientCancelled
 from core.session.daily_scheduler import DailyTaskScheduler
 from core.session.deduplicator import MessageDeduplicator
-from core.session.manager import SessionManager
+from core.session.manager import SessionManager, apply_pending_notices, format_file_notice
 from core.session.message_queue import SessionMessageQueue
 from core.session.reminder_scheduler import ReminderScheduler
 from core.session.task_registry import ActiveTaskRegistry
@@ -110,7 +110,7 @@ class FeishuWebhookHandler:
         normalized_text = event.text.strip().lower()
 
         if str(getattr(event, "file_key", "") or "").strip():
-            await self._handle_file_event(event=event, trace_id=trace_id)
+            await self._handle_file_event(event=event, session_key=session_key, trace_id=trace_id)
             return
 
         if normalized_text == "/stop":
@@ -227,7 +227,6 @@ class FeishuWebhookHandler:
             return
 
         history_messages = self._sessions.build_messages(session_key)
-        messages = history_messages + [{"role": "user", "content": user_text}]
         started = self._task_registry.start(
             key=session_key,
             trace_id=trace_id,
@@ -243,6 +242,10 @@ class FeishuWebhookHandler:
                 request_uuid=f"{event.message_id}-busy",
             )
             return
+        # Drain only once the turn is committed, so a rejected turn leaves the
+        # notices queued for the next one instead of dropping them.
+        user_text = apply_pending_notices(user_text, self._sessions.take_pending_files(session_key))
+        messages = history_messages + [{"role": "user", "content": user_text}]
         generated_since = time.time()
         delivered_image_paths: list[str] = []
         auto_complete_on_image = self._looks_like_image_request(event.text)
@@ -462,10 +465,12 @@ class FeishuWebhookHandler:
             request_uuid=f"{message_id}-remind",
         )
 
-    async def _handle_file_event(self, event: Any, trace_id: str) -> None:
-        """Archive a received file to the local archive dir and reply with its path.
+    async def _handle_file_event(self, event: Any, session_key: str, trace_id: str) -> None:
+        """Archive a received file and queue it as a notice for the next turn.
 
-        Files bypass the agent backend entirely: download, save, reply 已收藏.
+        The arrival turn deliberately does not wake the agent: the file is
+        saved, the user gets 已收藏, and the notice rides the next user message
+        so the agent can read it only if that message actually asks for it.
         """
         try:
             file_bytes, content_type = await self._feishu_client.download_message_file(
@@ -494,9 +499,19 @@ class FeishuWebhookHandler:
             )
             return
 
+        file_name = str(getattr(event, "file_name", "") or "") or Path(saved_path).name
+        self._sessions.note_incoming_file(
+            session_key,
+            format_file_notice(file_name, saved_path, len(file_bytes)),
+        )
         logger.info(
             "received file archived",
-            extra={"trace_id": trace_id, "event": "feishu.file_archive"},
+            extra={
+                "trace_id": trace_id,
+                "event": "feishu.file_archive",
+                "file_name": file_name,
+                "size": len(file_bytes),
+            },
         )
         await self._safe_reply(
             message_id=event.message_id,

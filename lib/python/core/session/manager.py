@@ -4,6 +4,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass(slots=True)
@@ -17,8 +18,35 @@ class Round:
 class SessionState:
     session_id: str
     rounds: list[Round] = field(default_factory=list)
+    pending_files: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+
+
+FILE_NOTICE_HEADER = (
+    "[文件通知] 用户此前发来过以下文件，已归档到本地。"
+    "仅当本轮确实需要时才读取，不要主动展开内容："
+)
+
+
+def format_file_notice(file_name: str, file_path: str, size: int | None = None) -> str:
+    name = (file_name or "").strip() or Path(file_path).name
+    if size is None:
+        return f"- {name} → {file_path}"
+    return f"- {name} → {file_path} ({size} bytes)"
+
+
+def apply_pending_notices(text: str, notices: list[str]) -> str:
+    """Fold queued file notices into the next user message.
+
+    The pi backend only forwards the last user message (its session holds the
+    rest), so a notice recorded in `rounds` would never reach it. Riding the
+    next user turn is what makes the file visible to every backend.
+    """
+    active = [notice for notice in notices if notice.strip()]
+    if not active:
+        return text
+    return "\n".join([FILE_NOTICE_HEADER, *active, "", text])
 
 
 class SessionManager:
@@ -49,6 +77,7 @@ class SessionManager:
                 session = SessionState(session_id=self._new_session_id())
                 self._sessions[key] = session
             session.rounds.clear()
+            session.pending_files.clear()
             session.updated_at = time.time()
             return session.session_id
 
@@ -76,6 +105,31 @@ class SessionManager:
             ] + recent_rounds
             session.updated_at = time.time()
             return before, len(session.rounds)
+
+    # Bounds the queued notices so a burst of files with no follow-up message
+    # cannot inflate every later prompt.
+    MAX_PENDING_FILES = 20
+
+    def note_incoming_file(self, key: str, notice: str) -> None:
+        if not notice.strip():
+            return
+        with self._lock:
+            session = self.get_or_create(key)
+            session.pending_files.append(notice)
+            if len(session.pending_files) > self.MAX_PENDING_FILES:
+                del session.pending_files[: len(session.pending_files) - self.MAX_PENDING_FILES]
+            session.updated_at = time.time()
+
+    def take_pending_files(self, key: str) -> list[str]:
+        """Drain queued file notices so each one is injected exactly once."""
+        with self._lock:
+            session = self._sessions.get(key)
+            if session is None or not session.pending_files:
+                return []
+            notices = list(session.pending_files)
+            session.pending_files.clear()
+            session.updated_at = time.time()
+            return notices
 
     def append_round(self, key: str, user: str, assistant: str) -> None:
         with self._lock:

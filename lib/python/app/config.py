@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     max_history_rounds: int = Field(default=50, validation_alias="MAX_HISTORY_ROUNDS")
     streaming_enabled: bool = Field(default=True, validation_alias="STREAMING_ENABLED")
     feishu_message_chunk_chars: int = Field(default=1500, validation_alias="FEISHU_MESSAGE_CHUNK_CHARS")
+    # Feishu caps im/v1/files at 30 MB, the tighter of the two channels.
+    push_file_max_mb: int = Field(default=30, validation_alias="PUSH_FILE_MAX_MB")
+    # The server binds 0.0.0.0, so /push/file needs its own bearer secret.
+    push_api_token: str = Field(default="", validation_alias="PUSH_API_TOKEN")
     wechat_webhook_token: str = Field(default="", validation_alias="WECHAT_WEBHOOK_TOKEN")
     wechat_message_chunk_chars: int = Field(default=1800, validation_alias="WECHAT_MESSAGE_CHUNK_CHARS")
     wechat_sidecar_base_url: str = Field(default="http://127.0.0.1:8787", validation_alias="WECHAT_SIDECAR_BASE_URL")
@@ -165,6 +169,11 @@ class Settings(BaseSettings):
     def feishu_image_upload_url(self) -> str:
         base = self.feishu_api_base.rstrip("/")
         return f"{base}/open-apis/im/v1/images"
+
+    @property
+    def feishu_file_upload_url(self) -> str:
+        base = self.feishu_api_base.rstrip("/")
+        return f"{base}/open-apis/im/v1/files"
 
     @property
     def feishu_message_resource_url_template(self) -> str:
