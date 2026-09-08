@@ -61,6 +61,7 @@ pi --mode json --session-id <id> [--model <provider/model>] \
    --append-system-prompt <rules/AGENTS.md> \
    --append-system-prompt <rules/admin.md> \
    --append-system-prompt <runtime/server/memory-context.md> \
+   --append-system-prompt "<当前系统时间: …>" \
    --approve <prompt>
 ```
 
@@ -68,7 +69,7 @@ pi --mode json --session-id <id> [--model <provider/model>] \
 |------|-----------------|
 | `--mode json` | 输出 JSONL 事件流，逐行读 stdout |
 | `--session-id` | 会话 ID **由 codeClaw 生成**（uuid4 hex），按 `user_id:chat_id` 维度持久化后复用 |
-| `--append-system-prompt` | 规则与长期记忆的注入通道，等价于 opencode 的 `instructions[]` |
+| `--append-system-prompt` | 规则、长期记忆与时钟的注入通道，等价于 opencode 的 `instructions[]`。值可以是文件路径（读内容），也可以是直接给的文本——时间走文本，每轮进程新生成一次 |
 | `--approve` | 非交互模式不弹信任提示，默认按 `defaultProjectTrust: ask` **忽略**项目级资源，需显式信任 |
 | `--tools` | 留空不传。它是 allowlist，传了会把扩展工具一起排除 |
 
@@ -76,7 +77,7 @@ pi --mode json --session-id <id> [--model <provider/model>] \
 - 输出读取：逐行 stdout，单行 idle 超时由 `PI_IDLE_TIMEOUT_SECONDS` 控制
 - 会话管理：pi 自行管理上下文窗口与压缩，codeClaw 不介入
 - 技能：由 codeClaw 扫 `SKILL_ROOTS` 生成摘要注入 prompt（仅首轮），模型再用内建 `read` 读 SKILL.md 正文
-- 时间感知：pi 不加载 opencode 的 `hooks/inject-time.js`，改由 `PiCliClient._time_context()` 在 prompt 首行拼 `<system-context>`
+- 时间感知：pi 不加载 opencode 的 `hooks/inject-time.js`，改由 `app/clock.py` 生成时间文本、经 `--append-system-prompt` 走 system 通道。**不拼 prompt 首行**：pi 会把 user 文本写进自己的 transcript，拼在 prompt 里的时间戳每轮留一份（微信主会话实测累积到 327 个），既稀释注意力又会被压缩进摘要；system 通道每轮全新、不落 transcript、不参与压缩
 
 ## 配置项
 
@@ -183,8 +184,9 @@ codeClaw 侧由 `PI_THINKING` 控制，默认 `high`，经 [pi_cli.py](../../lib
 - 注意：codeClaw 的 `/compact` 命令压的是它自己 SessionManager 的 rounds，而 pi 路径下
   只发最后一条用户消息，所以 `/compact` 对 pi 的真实上下文是空操作；真要清上下文用 `/new`
   或 `/reset`（会删掉 session_key → pi session id 映射，下轮新建 pi 会话）。
-- 注入的 system prompt（`--append-system-prompt` 的 rules + memory，约 5.5KB）**不参与压缩**，
-  压缩只处理会话消息，它每轮都在场。
+- 注入的 system prompt（`--append-system-prompt` 的 rules + memory + 时钟，约 5.5KB）**不参与压缩**，
+  压缩只处理会话消息，它每轮都在场。时钟走这条通道正是看中这点：压缩不会把它折进摘要，
+  也不会像 prompt 内联那样在 transcript 里留下几百个互相矛盾的旧时间戳。
 
 ## 事件流 schema
 

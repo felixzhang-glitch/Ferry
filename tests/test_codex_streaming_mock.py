@@ -134,3 +134,24 @@ async def test_codex_streaming_includes_generated_image_event() -> None:
     assert "已生成" in "".join(chunks)
     assert "file:///tmp/generated.png" in "".join(chunks)
     await client.close()
+
+
+def test_codex_prompt_leads_with_the_clock(tmp_path) -> None:
+    settings = SimpleNamespace(
+        codex_cli_bin="codex",
+        codex_work_dir=str(tmp_path),
+        codex_model="",
+        codex_permission_mode="full",
+        codex_timeout_seconds=30.0,
+        codex_stream_read_limit_bytes=262144,
+        codex_max_retries=1,
+        codex_retry_backoff_seconds=0.01,
+        codex_circuit_breaker_threshold=5,
+        codex_circuit_breaker_cooldown_seconds=30,
+    )
+    client = CodexClient(settings=settings)
+
+    prompt = client._build_prompt([{"role": "user", "content": "今天几号"}])
+
+    assert prompt.startswith("当前系统时间: ")
+    assert "对话历史:" in prompt

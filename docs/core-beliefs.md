@@ -16,7 +16,7 @@ codeClaw 的核心后端是一个具备原生会话管理的 CLI agent。设计�
 
 ### 这条信念的边界：后端不支持的，codeClaw 才补
 
-pi 明确不做 MCP、子 agent、内建权限系统、webfetch/websearch，也不加载 opencode 的 `plugin`。落到 codeClaw 上只补了一处：时间感知从 `hooks/inject-time.js`（opencode 插件）换成 prompt 首行拼 `<system-context>`。skills 摘要与规则、记忆注入是所有后端共用的既有机制，没有为 pi 单开通道。
+pi 明确不做 MCP、子 agent、内建权限系统、webfetch/websearch，也不加载 opencode 的 `plugin`。落到 codeClaw 上只补了一处：时间感知从 `hooks/inject-time.js`（opencode 插件）换成 pi 既有的 `--append-system-prompt`——和规则、记忆同一条通道，没有为时间单开机制。skills 摘要与规则、记忆注入同样是所有后端共用的既有注入点。
 
 ## 桥接不膨胀
 

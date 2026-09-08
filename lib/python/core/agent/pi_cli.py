@@ -10,10 +10,10 @@ import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import Any
 
 from app import memory
+from app.clock import time_context
 from app.config import Settings
 from core.agent.claude_cli import ClaudeCliClient
 from core.codex.client import CodexClientCancelled, CodexClientError
@@ -23,8 +23,6 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
 )
-
-_WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
 
 class PiCliClient:
@@ -449,6 +447,11 @@ class PiCliClient:
             command.extend(["--tools", self._tools])
         for path in self._system_prompt_files():
             command.extend(["--append-system-prompt", path])
+        # The clock rides the system channel, not the prompt: pi persists user
+        # text into its own transcript, so a prompt-inline timestamp left one
+        # stale copy per turn (327 in the WeChat session) for the model to pick
+        # from. System prompt text is per-process, never persisted, never compacted.
+        command.extend(["--append-system-prompt", time_context()])
         if self._approve_project:
             command.append("--approve")
         return command
@@ -646,7 +649,7 @@ class PiCliClient:
                 user_text = str(message.get("content", "")).strip()
                 break
 
-        lines = [self._time_context()]
+        lines: list[str] = []
         if include_preamble:
             # Rules and memory ride `--append-system-prompt`; only the skill
             # summary still needs prompt injection.
@@ -660,11 +663,10 @@ class PiCliClient:
                     ]
                 )
         lines.append(f"用户: {user_text}")
-        return "\n".join(line for line in lines if line is not None)
+        return "\n".join(lines)
 
     def _build_prompt(self, messages: list[dict[str, str]]) -> str:
         prompt_lines = [
-            self._time_context(),
             "请基于以下多轮对话，直接回复最后一条用户消息。",
             "仅输出回复正文，不要加额外前缀。",
         ]
@@ -693,16 +695,6 @@ class PiCliClient:
             prompt_lines.append(f"{label}: {content}")
 
         return "\n".join(prompt_lines)
-
-    @staticmethod
-    def _time_context() -> str:
-        """pi cannot load `hooks/inject-time.js`, so the clock rides the prompt."""
-        try:
-            now = datetime.now()
-            stamp = now.strftime("%Y-%m-%d %H:%M:%S")
-            return f"<system-context>当前系统时间: {stamp} {_WEEKDAYS[now.weekday()]}</system-context>"
-        except Exception:  # noqa: BLE001 - fail open, never break a turn
-            return ""
 
     def _get_or_create_session_id(self, session_key: str | None) -> tuple[str | None, bool]:
         """pi accepts an unknown `--session-id` and creates it, so codeClaw owns

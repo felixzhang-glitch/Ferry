@@ -12,6 +12,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from app.clock import time_context
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -545,6 +546,8 @@ class CodexClient:
 
     def _build_prompt(self, messages: list[dict[str, str]]) -> str:
         prompt_lines = [
+            time_context(),
+            "",
             "你是 CodexClaw 的后端助手。",
             "请基于以下多轮对话，直接回复最后一条用户消息。",
             "仅输出回复正文，不要加额外前缀。",

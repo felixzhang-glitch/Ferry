@@ -3,6 +3,18 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-09-08 · v0.7.1 · 时间注入改走 system 通道 + 四后端全覆盖
+
+- **需求**：用户报告「时间注入偶发失效」。排查 pi 两个主会话共 348 轮，**注入覆盖率 100%、一条不缺**，所以失效不在投递而在消费：微信主会话 2026-09-06 11:45（周日中午）注入正确，模型却说"今晚陪你到这儿""今天早点休息"，被用户质问后才回查纠正
+- **四个成因**：①时钟拼在 user 消息首行，不是 system 通道，长对话里被话题带走；②pi 把 user 文本写进自己的 transcript，时间戳逐轮累积——微信主会话 1118 条事件里攒了 **327 个** `当前系统时间`，模型找"现在"时有几百个同格式候选；③两次 compaction（8/7 `tokensBefore=112641`、8/14 `111738`）的摘要里留着 `2026-08-04`、`2026年7月` 这类旧绝对日期却没有"今天几号"，形成竞争锚点；④只给 `11:45:24` 不给时段，"这是中午不是晚上"要模型自己换算，9/6 那次栽的正是这一步
+- **时钟搬到 system 通道**：`pi_cli._build_command` 追加一个 `--append-system-prompt <时间文本>`（该参数值可传文本），`_build_native_prompt` / `_build_prompt` 不再拼首行。依据是本文档 `references/pi-cli.txt` 已验证的两条性质：注入的 system prompt **不参与压缩**、pi 每轮一个新进程 ⇒ 每轮全新、不落 transcript、不被折进摘要，②③两个成因直接消失
+- **时段免推导**：新增 `lib/python/app/clock.py`，输出 `当前系统时间: 2026-09-06 11:45 周日（中午）` + 一句时段词硬约束。时段边界 0-4 凌晨 / 5-8 早上 / 9-10 上午 / 11-13 中午 / 14-17 下午 / 18-22 晚上 / 23 深夜。顺带去掉秒，模型用不上
+- **补齐后端缺口**：`claude_cli._build_prompt`（claude + qodercli）与 `core/codex/client.py::_build_prompt` 此前**完全没有时间注入**，而 `rules/AGENTS.md` 却写着"每轮会自动注入时间、优先使用注入时间"——模型被告知自己有时钟，于是自信地编日期。两者改为在 prompt 首行内联同一个 `time_context()`；这两家每轮无状态、历史由 codeClaw 用原始消息 FIFO 拼接，内联不会像 pi 那样累积
+- **opencode 同步格式**：`hooks/inject-time.js` 的注入文本对齐新格式（含时段与硬约束），通道不变——它在 `chat.message` 里推 synthetic part，实测有效（opencode.db 里 754 条注入痕迹）
+- **规则纠偏**：`rules/AGENTS.md` 时间感知段原来只描述了 hook 一条路径（对 pi 是错的），改为如实列出各后端通道，并加两条：时段直接用不要自己换算、只有本轮注入的才是"现在"（历史 transcript 里仍残留改动前累积的旧时间戳，这条要顶一段时间）
+- **影响范围**：`lib/python/app/clock.py`（新增）、`core/agent/pi_cli.py`、`core/agent/claude_cli.py`、`core/codex/client.py`、`hooks/inject-time.js`、`rules/AGENTS.md`；文档 `README.md`、`docs/PRODUCT.md`、`docs/core-beliefs.md`、`docs/references/pi-cli.txt`。`PiCliClient._time_context()` 删除，无外部调用方
+- **验证**：`tests/test_clock.py`（时段边界 + 文本格式）、`tests/test_pi_session.py`（时钟在 `--append-system-prompt` 里、user prompt 不再含时钟）、`tests/test_claude_cli.py`（prompt 首行带时钟）；`cd conf && pytest -q` 全绿
+
 ## 2026-09-07 · v0.7.0 · 双向文件通道打通 + 入站文件进会话
 
 - **需求**：用户要求「从微信/飞书让 codeClaw 把一个文件发出来」。实测飞书成功、微信失败，排查后确认飞书那次是 agent 绕过 codeClaw 自己 curl OpenAPI 成的（codeClaw 自身两个渠道都发不了文件），微信则是 sidecar 出站只有文本

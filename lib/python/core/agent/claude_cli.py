@@ -12,6 +12,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from app.clock import time_context
 from app.config import Settings
 from app.rules import load_system_rules
 from core.codex.client import CodexClientCancelled, CodexClientError
@@ -521,14 +522,19 @@ class ClaudeCliClient:
 
     def _build_prompt(self, messages: list[dict[str, str]]) -> str:
         rules = load_system_rules()
+        # This family has no session transcript of its own (codeClaw replays raw
+        # messages each turn), so the clock can ride the prompt without piling up.
+        prompt_lines = [time_context(), ""]
         if rules:
-            prompt_lines = [rules, "", "请基于以下多轮对话，直接回复最后一条用户消息。"]
+            prompt_lines.extend([rules, "", "请基于以下多轮对话，直接回复最后一条用户消息。"])
         else:
-            prompt_lines = [
-                "你是 codeClaw 的后端助手。",
-                "请基于以下多轮对话，直接回复最后一条用户消息。",
-                "仅输出回复正文，不要加额外前缀。",
-            ]
+            prompt_lines.extend(
+                [
+                    "你是 codeClaw 的后端助手。",
+                    "请基于以下多轮对话，直接回复最后一条用户消息。",
+                    "仅输出回复正文，不要加额外前缀。",
+                ]
+            )
         skill_summary = self._build_skill_summary()
         if skill_summary:
             prompt_lines.extend(

@@ -97,6 +97,23 @@ description: >-
     assert "不要说当前环境没有加载 skill" in prompt
 
 
+def test_claude_prompt_leads_with_the_clock(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(ClaudeCliClient, "SKILL_ROOTS", ())
+    client = ClaudeCliClient(
+        settings=make_settings(tmp_path),
+        name="qodercli",
+        bin_path="qodercli",
+        model="",
+        permission_mode="auto",
+    )
+
+    prompt = client._build_prompt([{"role": "user", "content": "今天几号"}])
+
+    # rules/AGENTS.md 一直告诉模型"每轮都会注入时间"，而这个后端此前根本没注入
+    assert prompt.startswith("当前系统时间: ")
+    assert "今天几号" in prompt
+
+
 def test_read_skill_metadata_supports_quoted_description(tmp_path) -> None:
     skill_dir = tmp_path / "skills" / "lark-im"
     skill_dir.mkdir(parents=True)

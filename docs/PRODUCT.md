@@ -17,7 +17,7 @@
 | 会话命令 | 已完成 | `/new` `/reset` `/stop`、消息去重、同会话连发 FIFO 排队 |
 | 定时提醒 | 已完成 | `/remind 10m 喝水`，时间解析 + 持久化，重启恢复 |
 | 每日任务 | 已完成 | `/daily 08:00 简报`，创建 / list / cancel，重启恢复，飞书 + 微信双推送 |
-| 时间感知 | 已完成 | `hooks/inject-time.js` 每条消息注入系统时间（pi 在 prompt 首行拼时间） |
+| 时间感知 | 已完成 | 每轮注入带时段的系统时间，文本由 `app/clock.py` 统一生成：pi 走 `--append-system-prompt`，claude/qodercli/codex 拼 prompt 首行，opencode 走 `hooks/inject-time.js` |
 | 规则与技能热加载 | 已完成 | `rules/` 与 `skills/` 改完即生效，无需重启 |
 | 长期记忆 | 已完成 | `memory/` 目录，明确要求时写入并回执，常驻注入，快照仓本地无 remote |
 | 文件消息处理 | 已完成 | 文件自动归档，图片自动下载交给 agent |

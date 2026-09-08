@@ -17,7 +17,9 @@ pi 原生支持 session 持久化。昨晚聊的内容，今天还在。codeClaw
 
 ## 时间感知
 
-`hooks/inject-time.js` 在每条消息末尾注入当前系统时间。agent 因此能理解"明天"、"刚才"这类相对时间。删掉文件即禁用，不影响正常对话。
+每轮注入一行 `当前系统时间: 2026-09-06 11:45 周日（中午）`——时段由 codeClaw 算好，agent 不必自己从数字推断"现在是中午还是晚上"。通道按后端分：pi 走 `--append-system-prompt`（不进 session transcript，避免时间戳逐轮累积），claude/qodercli/codex 拼在 prompt 首行，opencode 走 `hooks/inject-time.js`。
+
+文本统一出自 `lib/python/app/clock.py`，删掉 opencode 的 hook 文件只影响 opencode。
 
 ## 规则与技能
 

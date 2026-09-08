@@ -399,7 +399,7 @@ def test_memory_failure_never_breaks_a_turn(tmp_path) -> None:
     assert all(not path.endswith("memory-context.md") for path in paths)
 
 
-def test_native_prompt_carries_the_clock_and_only_the_latest_message(tmp_path) -> None:
+def test_native_prompt_carries_only_the_latest_message(tmp_path) -> None:
     client = PiCliClient(settings=_make_settings(tmp_path))
     messages = [
         {"role": "user", "content": "旧问题"},
@@ -412,8 +412,38 @@ def test_native_prompt_carries_the_clock_and_only_the_latest_message(tmp_path) -
 
     assert "最新问题" in prompt
     assert "旧问题" not in prompt
-    # pi cannot load hooks/inject-time.js, so the clock has to ride the prompt.
-    assert "<system-context>当前系统时间:" in prompt
+    # pi persists user text into its own transcript, so a prompt-inline clock
+    # would leave one stale timestamp behind per turn.
+    assert "当前系统时间" not in prompt
+
+
+def test_history_prompt_also_leaves_the_clock_out(tmp_path) -> None:
+    client = PiCliClient(settings=_make_settings(tmp_path))
+
+    with patch("core.agent.pi_cli.ClaudeCliClient._build_skill_summary", return_value=""):
+        prompt = client._build_prompt([{"role": "user", "content": "最新问题"}])
+
+    assert "对话历史:" in prompt
+    assert "当前系统时间" not in prompt
+
+
+def test_clock_rides_the_system_prompt_after_rules_and_memory(tmp_path) -> None:
+    client = PiCliClient(settings=_make_settings(tmp_path))
+
+    with patch.object(
+        PiCliClient,
+        "_system_prompt_files",
+        return_value=["rules/AGENTS.md", "memory-context.md"],
+    ):
+        command = client._build_command(session_id="abc123")
+
+    injected = [
+        command[i + 1] for i, arg in enumerate(command) if arg == "--append-system-prompt"
+    ]
+
+    assert injected[:2] == ["rules/AGENTS.md", "memory-context.md"]
+    # The clock is passed as text, generated fresh for this turn's process.
+    assert injected[-1].startswith("当前系统时间: ")
 
 
 def test_skill_summary_is_injected_only_on_the_first_turn(tmp_path) -> None:

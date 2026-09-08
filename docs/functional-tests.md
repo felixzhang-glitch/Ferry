@@ -23,6 +23,8 @@
 | 14 | 出站文件推送 `/push/file` | 飞书 `im/v1/files` 上传 + `msg_type:file` 发送；微信转发 sidecar `/send_file`（getuploadurl → AES-128-ECB → CDN → `type:4` file_item）；`receive_id_type` 按 `ou_`/`on_`/`oc_` 自动识别；无 `PUSH_API_TOKEN` 时 503 关闭；401/400/404/413/502 错误分档；caption 先于文件发出 | `tests/test_feishu_file_send.py`、`tests/test_push_file_route.py`、`tests/wechat-sidecar.test.mjs` + 手动冒烟：小文件实发两个渠道确认收到 |
 | 15 | 入站文件进会话 | 归档后排入 `pending_files` 且**不唤醒 agent**；通知搭载下一轮 user 文本（pi 原生 session 只传最后一条 user 消息，写 `rounds` 无效）；文件+文字同发合并为一轮；命令轮不消费通知；任务被拒不 drain；归档失败不排通知；`/new` `/reset` 清空；队列上限 20；微信 `type:2` 图片不再被静默丢弃；`describeFileItem` 保留字段名但掩掉 `encrypt_query_param`/`aes_key` | `tests/test_inbound_file_session.py`、`tests/wechat-sidecar.test.mjs` + 手动冒烟：发个文件→再发一句话→确认 agent 知道文件路径且未主动展开 |
 
+| 16 | 时间感知（四后端） | 每轮注入 `当前系统时间: YYYY-MM-DD HH:MM 周X（时段）`；pi 走 `--append-system-prompt` 且时间**不落 pi transcript**（落进去会逐轮累积旧时间戳，微信主会话曾攒到 327 个）；claude/qodercli/codex 拼 prompt 首行；opencode 走 `hooks/inject-time.js`；时段由 `app/clock.py` 算好，模型不自行换算 | `tests/test_clock.py`、`tests/test_pi_session.py::test_clock_rides_the_system_prompt_after_rules_and_memory`、`tests/test_claude_cli.py::test_claude_prompt_leads_with_the_clock`、`tests/test_codex_streaming_mock.py::test_codex_prompt_leads_with_the_clock` + 手动冒烟：问「现在几点、什么时段」核对答案，再 `grep -c 当前系统时间 <pi session jsonl>` 应为 0 |
+
 ## 迭代验收规则
 
 1. 任何功能改动合入前必须全量测试通过：
