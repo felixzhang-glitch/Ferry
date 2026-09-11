@@ -3,6 +3,24 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-09-11 · README 更新与重启记录
+
+- **需求**：按当前单 pi 架构更新 README，补充部署方式、命令、配置迁移、测试与运维说明
+- **运行记录**：用户授权后使用 `supervisorctl restart 'codeclaw-stack:*'` 重启主服务和微信 sidecar，两者均为 RUNNING，`/healthz` 返回正常；未执行真实模型或渠道实发冒烟
+- **影响范围**：`README.md` 与本记录；说明 Supervisor 和脚本 PID 管理不可混用，移除旧的未重启描述。本次仅更新文档，不修改代码或真实配置
+
+## 2026-09-11 · v0.8.0 · 单 pi 收敛
+
+- **需求**：codeClaw 仅保留 pi 后端，删除其它 CLI 实现与多后端路由；保留飞书、微信既有文件 / 图片 / 定时 / 记忆 / 队列功能，不清用户运行数据、不修改真实配置、不重启上线
+- **接口与职责**：`app.main` 直接实例化 `PiCliClient`，无 router / `active_backend`；异常与轻量 `AgentClient` Protocol 归 `core.agent.types`，skills 发现归 `app.skills`。`SessionManager` 只管理 key 与 `pending_files`，不保存历史、独立桥接 UUID 或手工压缩；两个渠道每轮仅传当前 user，pi 自管历史与压缩
+- **命令行为**：`/backend`、`/pi` 只读显示唯一 pi 状态；旧后端命令提示已移除；`/compact`、`/compress` 仅提示由 pi 原生管理，不能伪报压缩成功；`/new`、`/reset` 清附件及当前 pi session 映射，旧 pi transcript 保留
+- **迁移兼容**：后端参数统一 `PI_*`，旧 `CODEX_*` 共享键仅作迁移回退，新键优先。`PI_WORK_DIR` 是最终 cwd，未设置时取旧 `<CODEX_WORK_DIR>/pi`，默认仍为 `./runtime/codex-workdir/pi`；不能照抄旧父目录或重复追加 `/pi`。`GENERATED_IMAGES_DIR` 替代 `CODEX_GENERATED_IMAGES_DIR`，保留旧键回退；渠道、记忆与 provider 凭证等共享配置继续保留
+- **数据边界**：现有 pi cwd、`PI_SESSION_STORE_PATH`、`PI_CODING_AGENT_DIR` 及其会话文件都不能自动迁移。后端选择状态不再读写，但旧状态、其它后端目录、用户附件、记忆不自动删除；恢复 pi 会话必须同时保留映射与对应 cwd 下的 transcript
+- **影响范围**：入口 / 配置 / 命令、`core/agent`、删除 `core/codex` 与其它 CLI 实现、`app/skills`、会话管理、双渠道 handler、定时任务装配、启动检查、配置模板及相关测试；文档 `README.md`、`docs/` 当前架构与回归说明同步。`routing.md` 精简但保留链接，references 只留 pi / 渠道参考，旧 HTML 分析仅标记历史快照，以下历史记录保留原文
+- **pi 可靠性**：会话重置后旧请求不能回写覆盖新映射；每次 CLI 尝试的总时限覆盖持续输出、进程退出及 stderr 等待，保留独立空闲超时；超时、任务取消、关闭流时回收进程，服务关闭时终止活动进程；即使出现 `agent_settled`，无有效输出仍判失败
+- **验证**：`.venv/bin/python -m pytest -c conf/pytest.ini -q`：463 passed；Node sidecar：16 passed。覆盖双渠道到 pi 的 mock 链路、原生会话重置/隔离/重启续接、附件与配置兼容、持续输出总超时、EOF 后挂起及真实本地子进程取消；脚本语法、旧模块引用与当前文档本地链接检查通过。服务固定 Python 解释器亦完成全量回归：463 passed；独立代码复核未发现阻断或高影响回归
+- **交付边界**：本机 pi 0.84.2 的版本与 CLI 参数已只读核对；未调用真实模型、发送渠道消息或重启服务，线上冒烟仍待执行。保留既有 FastAPI `on_event` 弃用警告，不在本次扩大改造范围
+
 ## 2026-09-08 · v0.7.1 · 时间注入改走 system 通道 + 四后端全覆盖
 
 - **需求**：用户报告「时间注入偶发失效」。排查 pi 两个主会话共 348 轮，**注入覆盖率 100%、一条不缺**，所以失效不在投递而在消费：微信主会话 2026-09-06 11:45（周日中午）注入正确，模型却说"今晚陪你到这儿""今天早点休息"，被用户质问后才回查纠正

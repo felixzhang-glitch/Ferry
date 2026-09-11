@@ -19,7 +19,7 @@ from channel.feishu.formatting import normalize_reply_text, split_message_text
 from channel.feishu.handler import FeishuWebhookHandler
 from channel.feishu.ws_client import FeishuWsClient
 from channel.wechat.handler import WeChatWebhookHandler
-from core.agent.router import AgentRouter
+from core.agent.pi_cli import PiCliClient
 from core.session.daily_scheduler import DailyTaskScheduler
 from core.session.deduplicator import MessageDeduplicator
 from core.session.manager import SessionManager
@@ -30,12 +30,12 @@ settings = get_settings()
 setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="codeClaw", version="0.7.0")
+app = FastAPI(title="codeClaw", version="0.8.0")
 
-session_manager = SessionManager(max_history_rounds=settings.max_history_rounds)
+session_manager = SessionManager()
 deduplicator = MessageDeduplicator(ttl_seconds=settings.deduplicate_ttl_seconds)
 task_registry = ActiveTaskRegistry()
-codex_client = AgentRouter(settings=settings)
+agent_client = PiCliClient(settings=settings)
 feishu_client = FeishuClient(settings=settings)
 
 
@@ -63,7 +63,7 @@ reminder_scheduler = ReminderScheduler(callback=send_reminder, store_path=settin
 
 
 async def run_daily_prompt(prompt: str, session_key: str, trace_id: str) -> str:
-    return await codex_client.chat(
+    return await agent_client.chat(
         messages=[{"role": "user", "content": prompt}],
         trace_id=trace_id,
         session_key=session_key,
@@ -92,7 +92,7 @@ daily_scheduler = DailyTaskScheduler(
 feishu_handler = FeishuWebhookHandler(
     settings=settings,
     feishu_client=feishu_client,
-    codex_client=codex_client,
+    agent_client=agent_client,
     session_manager=session_manager,
     deduplicator=deduplicator,
     task_registry=task_registry,
@@ -101,7 +101,7 @@ feishu_handler = FeishuWebhookHandler(
 )
 wechat_handler = WeChatWebhookHandler(
     settings=settings,
-    codex_client=codex_client,
+    agent_client=agent_client,
     session_manager=session_manager,
     deduplicator=deduplicator,
     task_registry=task_registry,
@@ -280,4 +280,4 @@ async def shutdown_event() -> None:
     await daily_scheduler.close()
     await reminder_scheduler.close()
     await feishu_client.close()
-    await codex_client.close()
+    await agent_client.close()

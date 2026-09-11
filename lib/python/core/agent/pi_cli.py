@@ -15,8 +15,8 @@ from typing import Any
 from app import memory
 from app.clock import time_context
 from app.config import Settings
-from core.agent.claude_cli import ClaudeCliClient
-from core.codex.client import CodexClientCancelled, CodexClientError
+from app.skills import build_skill_summary
+from core.agent.types import AgentClientCancelled, AgentClientError
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +28,10 @@ _PROJECT_ROOT = os.path.abspath(
 class PiCliClient:
     """Backend client for the `pi` coding agent (`pi --mode json`).
 
-    Same public surface as CodexClient / OpenCodeCliClient (chat / chat_stream /
-    cancel / close) so it is interchangeable behind AgentRouter.
+    Owns native session IDs, subprocess lifecycle, retries and event parsing.
+    Channels use this client directly; conversation history stays in pi.
 
-    Two things differ from the opencode client and drive the design here:
-
-    * pi emits real deltas. `message_update.assistantMessageEvent.text_delta`
-      carries only the new suffix, so there is no per-part bookkeeping to undo
-      opencode's accumulated-text events.
+    * `message_update.assistantMessageEvent.text_delta` carries real deltas.
     * `pi --mode json` always exits 0, even when the provider rejects the
       request. Success has to be decided from the event stream: the assistant
       `message_end` carries `stopReason` and, on failure, `errorMessage`.
@@ -49,14 +45,13 @@ class PiCliClient:
         self,
         settings: Settings,
         *,
-        name: str = "pi",
         bin_path: str | None = None,
         model: str | None = None,
         timeout_seconds: float | None = None,
         idle_timeout_seconds: float | None = None,
     ) -> None:
         self._settings = settings
-        self._name = name
+        self._name = "pi"
         self._bin = bin_path or settings.pi_cli_bin
         self._model = (model if model is not None else settings.pi_model).strip()
         self._thinking = settings.pi_thinking.strip()
@@ -82,7 +77,7 @@ class PiCliClient:
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
         self._cancel_requests: set[str] = set()
 
-        self._work_dir = os.path.abspath(os.path.join(settings.codex_work_dir, self._name))
+        self._work_dir = os.path.abspath(os.path.expanduser(settings.pi_work_dir))
         os.makedirs(self._work_dir, exist_ok=True)
 
         self._session_store_path = os.path.abspath(settings.pi_session_store_path)
@@ -94,10 +89,10 @@ class PiCliClient:
         return self._name
 
     async def close(self) -> None:
-        return None
-
-    def reset_backend_session(self, session_key: str) -> None:
-        self.reset_session(session_key)
+        with self._process_lock:
+            processes = list(self._active_processes.items())
+            self._cancel_requests.update(trace_id for trace_id, _ in processes)
+        await asyncio.gather(*(self._terminate_process(process) for _, process in processes))
 
     def reset_session(self, session_key: str) -> None:
         with self._session_lock:
@@ -112,11 +107,7 @@ class PiCliClient:
 
         session_id, is_new = self._get_or_create_session_id(session_key)
         session_holder: dict[str, str] = {}
-        prompt = (
-            self._build_native_prompt(messages, include_preamble=is_new)
-            if session_key
-            else self._build_prompt(messages)
-        )
+        prompt = self._build_native_prompt(messages, include_preamble=is_new)
         request_summary = self._summarize_messages(messages)
         attempt = 0
         start = time.monotonic()
@@ -131,7 +122,7 @@ class PiCliClient:
                         session_holder=session_holder,
                     )
                     self._record_success()
-                    self._persist_session(session_key, session_holder)
+                    self._persist_session(session_key, session_holder, expected_id=session_id)
                     duration_ms = int((time.monotonic() - start) * 1000)
                     logger.info(
                         "pi cli chat completed",
@@ -146,14 +137,14 @@ class PiCliClient:
                         },
                     )
                     return text
-                except CodexClientCancelled:
+                except AgentClientCancelled:
                     logger.info(
                         "pi cli chat cancelled",
                         extra={"trace_id": trace_id, "event": "pi.chat", "status_code": 499},
                     )
                     raise
-                except CodexClientError as exc:
-                    if not self._should_retry(exc) or attempt >= self._settings.codex_max_retries:
+                except AgentClientError as exc:
+                    if not self._should_retry(exc) or attempt >= self._settings.pi_max_retries:
                         self._record_failure()
                         duration_ms = int((time.monotonic() - start) * 1000)
                         logger.error(
@@ -170,7 +161,7 @@ class PiCliClient:
                         )
                         raise
                     self._raise_if_cancelled(trace_id)
-                    await asyncio.sleep(self._settings.codex_retry_backoff_seconds * (2**attempt))
+                    await asyncio.sleep(self._settings.pi_retry_backoff_seconds * (2**attempt))
                     self._raise_if_cancelled(trace_id)
                     attempt += 1
         finally:
@@ -183,11 +174,7 @@ class PiCliClient:
 
         session_id, is_new = self._get_or_create_session_id(session_key)
         session_holder: dict[str, str] = {}
-        prompt = (
-            self._build_native_prompt(messages, include_preamble=is_new)
-            if session_key
-            else self._build_prompt(messages)
-        )
+        prompt = self._build_native_prompt(messages, include_preamble=is_new)
         request_summary = self._summarize_messages(messages)
         attempt = 0
         start = time.monotonic()
@@ -209,7 +196,7 @@ class PiCliClient:
                         yield piece
 
                     self._record_success()
-                    self._persist_session(session_key, session_holder)
+                    self._persist_session(session_key, session_holder, expected_id=session_id)
                     duration_ms = int((time.monotonic() - start) * 1000)
                     logger.info(
                         "pi cli stream completed",
@@ -224,7 +211,7 @@ class PiCliClient:
                         },
                     )
                     return
-                except CodexClientCancelled:
+                except AgentClientCancelled:
                     duration_ms = int((time.monotonic() - start) * 1000)
                     logger.info(
                         "pi cli stream cancelled",
@@ -239,7 +226,7 @@ class PiCliClient:
                         },
                     )
                     raise
-                except CodexClientError as exc:
+                except AgentClientError as exc:
                     if emitted:
                         self._record_failure()
                         duration_ms = int((time.monotonic() - start) * 1000)
@@ -258,7 +245,7 @@ class PiCliClient:
                         )
                         raise
 
-                    if not self._should_retry(exc) or attempt >= self._settings.codex_max_retries:
+                    if not self._should_retry(exc) or attempt >= self._settings.pi_max_retries:
                         self._record_failure()
                         duration_ms = int((time.monotonic() - start) * 1000)
                         logger.error(
@@ -276,7 +263,7 @@ class PiCliClient:
                         raise
 
                     self._raise_if_cancelled(trace_id)
-                    await asyncio.sleep(self._settings.codex_retry_backoff_seconds * (2**attempt))
+                    await asyncio.sleep(self._settings.pi_retry_backoff_seconds * (2**attempt))
                     self._raise_if_cancelled(trace_id)
                     attempt += 1
         finally:
@@ -306,6 +293,7 @@ class PiCliClient:
         process = await self._spawn_process(command)
         self._register_process(trace_id, process)
         stderr_task = asyncio.create_task(self._read_stream_text(process.stderr))
+        deadline = time.monotonic() + self._timeout_seconds
 
         error_messages: list[str] = []
         fallback_parts: list[str] = []
@@ -316,12 +304,14 @@ class PiCliClient:
         final_stop_reason = ""
         final_error = ""
         emitted_text = False
-        settled = False
 
         try:
             while True:
                 self._raise_if_cancelled(trace_id)
-                line = await self._readline_with_idle_timeout(process.stdout)
+                line = await asyncio.wait_for(
+                    self._readline_with_idle_timeout(process.stdout),
+                    timeout=max(0.0, deadline - time.monotonic()),
+                )
                 if not line:
                     break
 
@@ -338,9 +328,6 @@ class PiCliClient:
                     found = self._extract_session_id(event)
                     if found:
                         session_holder["id"] = found
-
-                if str(event.get("type", "")) == "agent_settled":
-                    settled = True
 
                 message = self._assistant_message(event)
                 if message is not None:
@@ -361,16 +348,23 @@ class PiCliClient:
                     emitted_text = True
                     for chunk in self._split_chunks(delta):
                         yield chunk
+            return_code = await asyncio.wait_for(
+                process.wait(), timeout=max(0.0, deadline - time.monotonic())
+            )
+            stderr_text = await asyncio.wait_for(
+                asyncio.shield(stderr_task), timeout=max(0.0, deadline - time.monotonic())
+            )
         except asyncio.TimeoutError as exc:
-            await self._terminate_process(process)
-            stderr_text = await stderr_task
             self._raise_if_cancelled(trace_id)
-            raise CodexClientError(f"{self._name} cli timeout: {self._truncate(stderr_text)}") from exc
+            raise AgentClientError(f"{self._name} cli timeout") from exc
         finally:
-            self._unregister_process(trace_id)
-
-        return_code = await process.wait()
-        stderr_text = await stderr_task
+            # Also reap the process on task cancellation or a closed stream.
+            try:
+                await self._terminate_process(process)
+            finally:
+                stderr_task.cancel()
+                await asyncio.gather(stderr_task, return_exceptions=True)
+                self._unregister_process(trace_id)
 
         self._raise_if_cancelled(trace_id)
         if return_code != 0:
@@ -379,7 +373,7 @@ class PiCliClient:
                 or "\n".join(fallback_parts).strip()
                 or stderr_text.strip()
             )
-            raise CodexClientError(
+            raise AgentClientError(
                 f"{self._name} cli failed: return_code={return_code}, error={self._truncate(error_hint)}"
             )
 
@@ -390,10 +384,10 @@ class PiCliClient:
         # as if it were complete.
         if final_stop_reason in {"error", "aborted"}:
             detail = final_error or " | ".join(error_messages) or final_stop_reason
-            raise CodexClientError(f"{self._name} cli error: {self._truncate(detail)}")
+            raise AgentClientError(f"{self._name} cli error: {self._truncate(detail)}")
 
         if error_messages and not emitted_text and not final_text:
-            raise CodexClientError(f"{self._name} cli error: {self._truncate(' | '.join(error_messages))}")
+            raise AgentClientError(f"{self._name} cli error: {self._truncate(' | '.join(error_messages))}")
 
         if emitted_text:
             return
@@ -404,7 +398,7 @@ class PiCliClient:
             return
 
         if error_messages:
-            raise CodexClientError(f"{self._name} cli error: {self._truncate(' | '.join(error_messages))}")
+            raise AgentClientError(f"{self._name} cli error: {self._truncate(' | '.join(error_messages))}")
 
         fallback = "\n".join(fallback_parts).strip()
         if fallback:
@@ -412,10 +406,9 @@ class PiCliClient:
                 yield chunk
             return
 
-        if not settled:
-            raise CodexClientError(
-                f"{self._name} cli produced no output: {self._truncate(stderr_text)}"
-            )
+        raise AgentClientError(
+            f"{self._name} cli produced no output: {self._truncate(stderr_text)}"
+        )
 
     async def _run_once(
         self,
@@ -458,12 +451,10 @@ class PiCliClient:
 
     @staticmethod
     def _system_prompt_files() -> list[str]:
-        """Rules + long-term memory, injected the same way opencode gets them.
+        """Inject rules and memory on every turn through pi's system channel.
 
         `--append-system-prompt` reads a path's contents (verified against pi
-        0.83.0), which makes it the direct equivalent of opencode's
-        `instructions` config: the memory write protocol has to be present on
-        every turn, so it cannot ride the first-turn preamble.
+        0.83.0). These files are reread each turn, not stored in the transcript.
         """
         paths = [
             path
@@ -504,7 +495,7 @@ class PiCliClient:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            limit=self._settings.codex_stream_read_limit_bytes,
+            limit=self._settings.pi_stream_read_limit_bytes,
             start_new_session=True,
         )
 
@@ -547,7 +538,7 @@ class PiCliClient:
         with self._process_lock:
             if trace_id not in self._cancel_requests:
                 return
-        raise CodexClientCancelled(f"{self._name} cli cancelled by user")
+        raise AgentClientCancelled(f"{self._name} cli cancelled by user")
 
     def _clear_cancel_request(self, trace_id: str) -> None:
         with self._process_lock:
@@ -653,7 +644,7 @@ class PiCliClient:
         if include_preamble:
             # Rules and memory ride `--append-system-prompt`; only the skill
             # summary still needs prompt injection.
-            skill_summary = ClaudeCliClient._build_skill_summary()
+            skill_summary = build_skill_summary()
             if skill_summary:
                 lines.extend(
                     [
@@ -664,37 +655,6 @@ class PiCliClient:
                 )
         lines.append(f"用户: {user_text}")
         return "\n".join(lines)
-
-    def _build_prompt(self, messages: list[dict[str, str]]) -> str:
-        prompt_lines = [
-            "请基于以下多轮对话，直接回复最后一条用户消息。",
-            "仅输出回复正文，不要加额外前缀。",
-        ]
-        skill_summary = ClaudeCliClient._build_skill_summary()
-        if skill_summary:
-            prompt_lines.extend(
-                [
-                    "",
-                    "本机可用 skills 如下。若用户询问 skills，必须基于此列表回答，不要说当前环境没有加载 skill。",
-                    skill_summary,
-                ]
-            )
-        prompt_lines.extend(["", "对话历史:"])
-
-        for message in messages:
-            role = str(message.get("role", "user"))
-            content = str(message.get("content", "")).strip()
-            if not content:
-                continue
-            if role == "assistant":
-                label = "助手"
-            elif role == "system":
-                label = "系统"
-            else:
-                label = "用户"
-            prompt_lines.append(f"{label}: {content}")
-
-        return "\n".join(prompt_lines)
 
     def _get_or_create_session_id(self, session_key: str | None) -> tuple[str | None, bool]:
         """pi accepts an unknown `--session-id` and creates it, so codeClaw owns
@@ -710,7 +670,9 @@ class PiCliClient:
             self._save_sessions()
             return session_id, True
 
-    def _persist_session(self, session_key: str | None, session_holder: dict[str, str]) -> None:
+    def _persist_session(
+        self, session_key: str | None, session_holder: dict[str, str], *, expected_id: str | None
+    ) -> None:
         if not session_key:
             return
         new_id = session_holder.get("id")
@@ -718,7 +680,9 @@ class PiCliClient:
             return
         with self._session_lock:
             current = self._session_ids.get(session_key)
-            if current == new_id:
+            # /new or /reset can run while this process is still finishing.
+            # Never restore the old ID over the reset (or a newer conversation).
+            if current != expected_id or current == new_id:
                 return
             logger.warning(
                 "pi returned a different session id",
@@ -759,7 +723,7 @@ class PiCliClient:
     def _assert_circuit_closed(self) -> None:
         with self._lock:
             if time.time() < self._circuit_open_until:
-                raise CodexClientError("circuit breaker is open")
+                raise AgentClientError("circuit breaker is open")
 
     def _record_success(self) -> None:
         with self._lock:
@@ -769,8 +733,8 @@ class PiCliClient:
     def _record_failure(self) -> None:
         with self._lock:
             self._consecutive_failures += 1
-            if self._consecutive_failures >= self._settings.codex_circuit_breaker_threshold:
-                self._circuit_open_until = time.time() + self._settings.codex_circuit_breaker_cooldown_seconds
+            if self._consecutive_failures >= self._settings.pi_circuit_breaker_threshold:
+                self._circuit_open_until = time.time() + self._settings.pi_circuit_breaker_cooldown_seconds
 
     def _split_chunks(self, text: str) -> list[str]:
         content = text

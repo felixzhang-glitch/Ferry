@@ -4,25 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from core.agent.types import AgentClient
 from core.session.manager import SessionManager
-
-HELP_TEXT = (
-    "可用命令:\n"
-    "/help - 查看帮助\n"
-    "/new - 新建会话（不继承历史）\n"
-    "/reset - 清空当前会话上下文\n"
-    "/compact - 压缩当前会话上下文（保留最近 2 轮）\n"
-    "/stop - 终止当前正在运行的任务\n"
-    "/backend - 查看当前后端及可切换列表\n"
-    "/codex - 切换后端为 Codex CLI\n"
-    "/claude - 切换后端为 Claude Code\n"
-    "/qodercli - 切换后端为 Qoder CLI\n"
-    "/opencode - 切换后端为 OpenCode CLI\n"
-    "/pi - 切换后端为 Pi Agent\n"
-    "/skills - 列出本机可用 skills\n"
-    "/remind 10m 内容 - 定时发送提醒（支持 s/m/h/d）\n"
-    "/daily HH:MM 提示词 - 每日定时简报（/daily list 查看，/daily cancel <id> 取消）"
-)
 
 
 def build_help_text(*, include_remind: bool = True) -> str:
@@ -31,14 +14,9 @@ def build_help_text(*, include_remind: bool = True) -> str:
         "/help - 查看帮助",
         "/new - 新建会话（不继承历史）",
         "/reset - 清空当前会话上下文",
-        "/compact - 压缩当前会话上下文（保留最近 2 轮）",
+        "/compact /compress - 上下文由 pi 自动管理，不支持手工压缩",
         "/stop - 终止当前正在运行的任务",
-        "/backend - 查看当前后端及可切换列表",
-        "/codex - 切换后端为 Codex CLI",
-        "/claude - 切换后端为 Claude Code",
-        "/qodercli - 切换后端为 Qoder CLI",
-        "/opencode - 切换后端为 OpenCode CLI",
-        "/pi - 切换后端为 Pi Agent",
+        "/backend /pi - 查看唯一后端 pi",
         "/skills - 列出本机可用 skills",
     ]
     if include_remind:
@@ -48,13 +26,9 @@ def build_help_text(*, include_remind: bool = True) -> str:
     lines.append("/daily HH:MM 提示词 - 每日定时简报（/daily list 查看，/daily cancel <id> 取消）")
     return "\n".join(lines)
 
-BACKEND_COMMANDS: dict[str, str] = {
-    "/codex": "codex",
-    "/claude": "claude",
-    "/qodercli": "qodercli",
-    "/opencode": "opencode",
-    "/pi": "pi",
-}
+
+HELP_TEXT = build_help_text()
+REMOVED_BACKEND_COMMANDS = {"/codex", "/claude", "/qodercli", "/opencode"}
 
 
 @dataclass(slots=True)
@@ -143,57 +117,37 @@ def process_command(
     raw_text: str,
     session_manager: SessionManager,
     session_key: str,
-    router: Any | None = None,
+    agent_client: AgentClient | None = None,
 ) -> CommandResult | None:
     text = raw_text.strip().lower()
+    command = text.split(maxsplit=1)[0] if text else ""
 
     if text == "/help":
         return CommandResult(handled=True, reply_text=HELP_TEXT)
 
-    if text == "/new":
-        session_id = session_manager.new_session(session_key)
-        _reset_backend_session(router, session_key)
-        return CommandResult(handled=True, reply_text=f"已创建新会话: {session_id[:8]}")
-
-    if text == "/reset":
+    if text in {"/new", "/reset"}:
         session_manager.reset_session(session_key)
-        _reset_backend_session(router, session_key)
-        return CommandResult(handled=True, reply_text="已清空当前会话上下文。")
+        if agent_client is not None:
+            agent_client.reset_session(session_key)
+        reply = "已创建新会话，不再继承历史，待处理附件已清空。" if text == "/new" else "已清空当前会话上下文及待处理附件。"
+        return CommandResult(handled=True, reply_text=reply)
 
-    if text in {"/compact", "/compress"}:
-        before, after = session_manager.compact_session(session_key)
-        if before == after:
-            return CommandResult(handled=True, reply_text="当前会话上下文较短，无需压缩。")
-        return CommandResult(handled=True, reply_text=f"已压缩当前会话上下文: {before} 轮 -> {after} 轮。")
+    if command in {"/compact", "/compress"}:
+        return CommandResult(
+            handled=True,
+            reply_text="上下文由 pi 自动管理，桥接层不支持手工压缩。",
+        )
 
-    if router is not None:
-        if text == "/backend":
-            current = router.active
-            options = "、".join(f"{name}（{router.label(name)}）" for name in router.available())
-            return CommandResult(
-                handled=True,
-                reply_text=f"当前后端: {current}（{router.label(current)}）\n可切换: {options}",
-            )
+    if command in {"/backend", "/pi"}:
+        return CommandResult(handled=True, reply_text="当前唯一后端为 pi，不支持切换后端。")
 
-        if text in BACKEND_COMMANDS:
-            target = BACKEND_COMMANDS[text]
-            if router.active == target:
-                return CommandResult(handled=True, reply_text=f"当前已是 {target}（{router.label(target)}）后端。")
-            if router.switch(target):
-                session_manager.reset_session(session_key)
-                _reset_backend_session(router, session_key)
-                return CommandResult(handled=True, reply_text=f"已切换后端为 {target}（{router.label(target)}）。")
-            return CommandResult(handled=True, reply_text=f"切换失败: 未知后端 {target}。")
+    if command in REMOVED_BACKEND_COMMANDS:
+        return CommandResult(
+            handled=True,
+            reply_text=f"{command} 后端已移除，不再支持。当前唯一后端为 pi。",
+        )
 
     return None
-
-
-def _reset_backend_session(router: Any | None, session_key: str) -> None:
-    if router is None:
-        return
-    reset = getattr(router, "reset_backend_session", None)
-    if callable(reset):
-        reset(session_key)
 
 
 def parse_reminder_command(raw_text: str) -> ReminderCommand | None:

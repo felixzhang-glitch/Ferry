@@ -1,11 +1,11 @@
-"""End-to-end chain tests: channel handler -> AgentRouter -> pi CLI.
+"""End-to-end chain tests: channel handler -> PiCliClient -> pi CLI.
 
 The pi subprocess is faked at the `create_subprocess_exec` boundary and replays
 the exact JSONL shape observed from `pi --mode json` (captured on v0.83.0, shape
 re-verified against v0.84.2, provider bailian/deepseek-v4-flash-0731), so
 everything above the process boundary is the real code path: command building,
 system-prompt file injection, delta parsing, session id ownership and
-persistence, router dispatch, and the channel reply.
+persistence and the channel reply.
 """
 
 import asyncio
@@ -18,7 +18,7 @@ import pytest
 from app.config import Settings
 from channel.feishu.handler import FeishuWebhookHandler
 from channel.wechat.handler import WeChatWebhookHandler
-from core.agent.router import AgentRouter
+from core.agent.pi_cli import PiCliClient
 from core.session.deduplicator import MessageDeduplicator
 from core.session.manager import SessionManager
 from core.session.task_registry import ActiveTaskRegistry
@@ -28,15 +28,16 @@ MODEL = "bailian/deepseek-v4-flash-0731"
 
 def _make_settings(tmp_path, **overrides) -> Settings:
     values = {
-        "ACTIVE_BACKEND": "pi",
-        "BACKEND_STATE_PATH": str(tmp_path / "server" / "backend.json"),
-        "CODEX_WORK_DIR": str(tmp_path / "workdir"),
-        "CODEX_GENERATED_IMAGES_DIR": str(tmp_path / "generated-images"),
+        "PI_WORK_DIR": str(tmp_path / "workdir"),
+        "GENERATED_IMAGES_DIR": str(tmp_path / "generated-images"),
         "FEISHU_RECEIVED_IMAGES_DIR": str(tmp_path / "received-images"),
         "PI_MODEL": MODEL,
         "PI_SESSION_STORE_PATH": str(tmp_path / "server" / "pi-sessions.json"),
         "DASHSCOPE_API_KEY": "sk-test-chain",
-        "OPENCODE_SESSION_STORE_PATH": str(tmp_path / "server" / "opencode-sessions.json"),
+        "PI_MAX_RETRIES": 0,
+        "PI_CLI_BIN": "pi",
+        "PI_OFFLINE": True,
+        "PI_APPROVE_PROJECT": True,
         "MEMORY_ENABLED": False,
         "MEMORY_DIR": str(tmp_path / "memory"),
         "MEMORY_GIT_DIR": str(tmp_path / "memory-git"),
@@ -216,12 +217,12 @@ class FakeFeishuClient:
         return "om_image"
 
 
-def _feishu_handler(settings: Settings, feishu_client: FakeFeishuClient, router: AgentRouter) -> FeishuWebhookHandler:
+def _feishu_handler(settings: Settings, feishu_client: FakeFeishuClient, agent_client: PiCliClient) -> FeishuWebhookHandler:
     return FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=router,
-        session_manager=SessionManager(max_history_rounds=10),
+        agent_client=agent_client,
+        session_manager=SessionManager(),
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
     )
@@ -237,10 +238,9 @@ async def test_feishu_message_reaches_pi_and_reply_flows_back(tmp_path) -> None:
         patch("core.agent.pi_cli.memory.write_context_file", return_value=None),
         patch("asyncio.create_subprocess_exec", new=spawn),
     ):
-        router = AgentRouter(settings=settings)
-        assert router.active == "pi"
+        agent_client = PiCliClient(settings=settings)
 
-        handler = _feishu_handler(settings, feishu_client, router)
+        handler = _feishu_handler(settings, feishu_client, agent_client)
         await handler._handle_text_event(
             event=SimpleNamespace(
                 message_id="om_pi_1",
@@ -267,7 +267,7 @@ async def test_feishu_message_reaches_pi_and_reply_flows_back(tmp_path) -> None:
     assert env["PI_OFFLINE"] == "1"
 
     kwargs = spawn.kwargs()
-    assert kwargs["cwd"] == str(tmp_path / "workdir" / "pi")
+    assert kwargs["cwd"] == str(tmp_path / "workdir")
     # supervisor's stdin pipe never closes and pi would read it as prompt input.
     assert kwargs["stdin"] == asyncio.subprocess.DEVNULL
     assert kwargs["start_new_session"] is True
@@ -288,7 +288,7 @@ async def test_second_feishu_turn_reuses_the_stored_pi_session_id(tmp_path) -> N
         patch("core.agent.pi_cli.memory.write_context_file", return_value=None),
         patch("asyncio.create_subprocess_exec", new=spawn),
     ):
-        handler = _feishu_handler(settings, feishu_client, AgentRouter(settings=settings))
+        handler = _feishu_handler(settings, feishu_client, PiCliClient(settings=settings))
         for index, text in enumerate(("第一个问题", "第二个问题"), start=1):
             await handler._handle_text_event(
                 event=SimpleNamespace(
@@ -313,7 +313,7 @@ async def test_second_feishu_turn_reuses_the_stored_pi_session_id(tmp_path) -> N
 
 
 @pytest.mark.asyncio
-async def test_wechat_webhook_reaches_pi_through_router(tmp_path) -> None:
+async def test_wechat_webhook_reaches_pi_through_agent_client(tmp_path) -> None:
     settings = _make_settings(tmp_path)
     spawn = _SpawnRecorder("微信链路通了")
 
@@ -323,8 +323,8 @@ async def test_wechat_webhook_reaches_pi_through_router(tmp_path) -> None:
     ):
         handler = WeChatWebhookHandler(
             settings=settings,
-            codex_client=AgentRouter(settings=settings),
-            session_manager=SessionManager(max_history_rounds=10),
+            agent_client=PiCliClient(settings=settings),
+            session_manager=SessionManager(),
             deduplicator=MessageDeduplicator(ttl_seconds=3600),
             task_registry=ActiveTaskRegistry(),
         )
@@ -363,8 +363,8 @@ async def test_thinking_deltas_never_reach_either_channel(tmp_path) -> None:
         patch("core.agent.pi_cli.memory.write_context_file", return_value=None),
         patch("asyncio.create_subprocess_exec", new=spawn),
     ):
-        router = AgentRouter(settings=settings)
-        feishu = _feishu_handler(settings, feishu_client, router)
+        agent_client = PiCliClient(settings=settings)
+        feishu = _feishu_handler(settings, feishu_client, agent_client)
         await feishu._handle_text_event(
             event=SimpleNamespace(
                 message_id="om_pi_thinking",
@@ -377,8 +377,8 @@ async def test_thinking_deltas_never_reach_either_channel(tmp_path) -> None:
 
         wechat = WeChatWebhookHandler(
             settings=settings,
-            codex_client=router,
-            session_manager=SessionManager(max_history_rounds=10),
+            agent_client=agent_client,
+            session_manager=SessionManager(),
             deduplicator=MessageDeduplicator(ttl_seconds=3600),
             task_registry=ActiveTaskRegistry(),
         )
@@ -443,9 +443,8 @@ async def test_provider_error_with_exit_code_zero_replies_generic_error(tmp_path
     with (
         patch("core.agent.pi_cli.memory.write_context_file", return_value=None),
         patch("asyncio.create_subprocess_exec", new=failing_spawn),
-        patch("asyncio.sleep", new=lambda *_args, **_kwargs: asyncio.sleep(0)),
     ):
-        handler = _feishu_handler(settings, feishu_client, AgentRouter(settings=settings))
+        handler = _feishu_handler(settings, feishu_client, PiCliClient(settings=settings))
         await handler._handle_text_event(
             event=SimpleNamespace(
                 message_id="om_pi_fail",
@@ -461,3 +460,162 @@ async def test_provider_error_with_exit_code_zero_replies_generic_error(tmp_path
     # provider error stays in the logs rather than reaching the chat.
     assert replied == ["服务繁忙，请稍后重试。"]
     assert "invalid_api_key" not in replied[-1]
+
+
+@pytest.fixture(autouse=True)
+def isolate_pi_context(monkeypatch):
+    monkeypatch.setattr("core.agent.pi_cli.memory.write_context_file", lambda: None)
+    monkeypatch.setattr("core.agent.pi_cli.build_skill_summary", lambda: "")
+
+
+def _channel_harness(channel, settings, agent_client, sessions=None, deduplicator=None, task_registry=None):
+    sessions = sessions if sessions is not None else SessionManager()
+    deduplicator = deduplicator if deduplicator is not None else MessageDeduplicator(ttl_seconds=3600)
+    task_registry = task_registry if task_registry is not None else ActiveTaskRegistry()
+    if channel == "feishu":
+        transport = FakeFeishuClient()
+        handler = FeishuWebhookHandler(
+            settings=settings,
+            feishu_client=transport,
+            agent_client=agent_client,
+            session_manager=sessions,
+            deduplicator=deduplicator,
+            task_registry=task_registry,
+        )
+        key = "shared-user:shared-chat"
+
+        async def send(text, message_id):
+            offset = len(transport.reply_calls)
+            await handler._handle_text_event(
+                event=SimpleNamespace(
+                    message_id=message_id, user_id="shared-user", chat_id="shared-chat", text=text
+                ),
+                trace_id=f"trace-{message_id}",
+            )
+            return [text for text, _ in transport.reply_calls[offset:]]
+    else:
+        handler = WeChatWebhookHandler(
+            settings=settings,
+            agent_client=agent_client,
+            session_manager=sessions,
+            deduplicator=deduplicator,
+            task_registry=task_registry,
+        )
+        key = "wechat:shared-chat:shared-user"
+
+        async def send(text, message_id):
+            result = await handler.handle_webhook(
+                headers={},
+                raw_body=json.dumps({
+                    "message_id": message_id, "account_id": "shared-chat", "user_id": "shared-user", "text": text
+                }).encode(),
+            )
+            return result["replies"]
+
+    return send, key, sessions
+
+
+def _session_id(spawn, index):
+    command = spawn.command(index)
+    return command[command.index("--session-id") + 1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel", ["feishu", "wechat"])
+@pytest.mark.parametrize("command", ["/new", "/reset"])
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_session_commands_cut_the_real_pi_session_and_clear_files(tmp_path, monkeypatch, channel, command, streaming):
+    settings = _make_settings(tmp_path, STREAMING_ENABLED=streaming)
+    spawn = _SpawnRecorder("旧会话回复", "新会话回复", "重启后续接")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    agent_client = PiCliClient(settings=settings)
+    send, key, sessions = _channel_harness(channel, settings, agent_client)
+
+    assert await send("旧问题", "m1") == ["旧会话回复"]
+    old_id = _session_id(spawn, 0)
+    sessions.note_incoming_file(key, "- stale-file.pdf")
+    replies = await send(command, "reset-command")
+
+    assert len(spawn.calls) == 1  # commands never reach the model
+    expected = "已创建新会话，不再继承历史，待处理附件已清空。" if command == "/new" else "已清空当前会话上下文及待处理附件。"
+    assert replies == [expected]
+    assert sessions.take_pending_files(key) == []
+    with open(settings.pi_session_store_path, encoding="utf-8") as fh:
+        assert key not in json.load(fh)
+    assert key not in PiCliClient(settings=settings)._session_ids
+
+    assert await send("新问题", "m2") == ["新会话回复"]
+    new_id = _session_id(spawn, 1)
+    assert new_id != old_id
+    assert "旧问题" not in spawn.command(1)[-1]
+    assert "stale-file.pdf" not in spawn.command(1)[-1]
+    await agent_client.close()
+
+    restarted, restarted_key, _ = _channel_harness(channel, settings, PiCliClient(settings=settings))
+    assert restarted_key == key
+    assert await restarted("重启追问", "m3") == ["重启后续接"]
+    assert _session_id(spawn, 2) == new_id
+    assert spawn.kwargs(2)["cwd"] == settings.pi_work_dir
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_channels_keep_separate_native_sessions_and_resume_after_restart(tmp_path, monkeypatch, streaming):
+    settings = _make_settings(tmp_path, STREAMING_ENABLED=streaming)
+    spawn = _SpawnRecorder("收到")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    sessions = SessionManager()
+    agent_client = PiCliClient(settings=settings)
+    shared = dict(deduplicator=MessageDeduplicator(ttl_seconds=3600), task_registry=ActiveTaskRegistry())
+    feishu, feishu_key, _ = _channel_harness("feishu", settings, agent_client, sessions, **shared)
+    wechat, wechat_key, _ = _channel_harness("wechat", settings, agent_client, sessions, **shared)
+    sessions.note_incoming_file(feishu_key, "- feishu-only.pdf")
+    sessions.note_incoming_file(wechat_key, "- wechat-only.pdf")
+
+    assert await feishu("飞书首轮", "m1") == ["收到"]
+    assert await wechat("微信首轮", "m1") == ["收到"]
+    first_ids = [_session_id(spawn, index) for index in range(2)]
+    assert first_ids[0] != first_ids[1]
+    assert "feishu-only.pdf" in spawn.command(0)[-1]
+    assert "wechat-only.pdf" not in spawn.command(0)[-1]
+    assert "wechat-only.pdf" in spawn.command(1)[-1]
+    assert "feishu-only.pdf" not in spawn.command(1)[-1]
+    with open(settings.pi_session_store_path, encoding="utf-8") as fh:
+        assert json.load(fh) == dict(zip([feishu_key, wechat_key], first_ids))
+    await agent_client.close()
+
+    restarted_client = PiCliClient(settings=settings)
+    fresh_sessions = SessionManager()
+    shared = dict(deduplicator=MessageDeduplicator(ttl_seconds=3600), task_registry=ActiveTaskRegistry())
+    feishu, _, _ = _channel_harness("feishu", settings, restarted_client, fresh_sessions, **shared)
+    wechat, _, _ = _channel_harness("wechat", settings, restarted_client, fresh_sessions, **shared)
+    assert await feishu("飞书追问", "m2") == ["收到"]
+    assert await wechat("微信追问", "m2") == ["收到"]
+    assert [_session_id(spawn, index) for index in (2, 3)] == first_ids
+    assert spawn.command(2)[-1] == "用户: 飞书追问"
+    assert spawn.command(3)[-1] == "用户: 微信追问"
+
+    # Resetting one channel leaves the other channel's pi session intact.
+    await feishu("/reset", "reset")
+    assert await wechat("微信继续", "m3") == ["收到"]
+    assert _session_id(spawn, 4) == first_ids[1]
+    assert await feishu("飞书新会话", "m3") == ["收到"]
+    assert _session_id(spawn, 5) not in first_ids
+    await restarted_client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel", ["feishu", "wechat"])
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_pi_nonzero_exit_returns_safe_error(tmp_path, monkeypatch, channel, streaming):
+    settings = _make_settings(tmp_path, STREAMING_ENABLED=streaming)
+    calls = []
+
+    async def failing_spawn(*command, **kwargs):
+        calls.append(command)
+        return _FakeProcess(b"", return_code=1, stderr=b"private provider detail")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", failing_spawn)
+    send, _, _ = _channel_harness(channel, settings, PiCliClient(settings=settings))
+    assert await send("触发失败", "m1") == ["服务繁忙，请稍后重试。"]
+    assert len(calls) == 1

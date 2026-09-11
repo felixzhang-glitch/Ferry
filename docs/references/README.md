@@ -1,6 +1,6 @@
 ## 用途
 
-本目录维护项目需要引用的外部知识：第三方包、外部 API、内部系统规则等。供 Agent 开发时查阅，避免重复搜索。
+本目录仅保留 pi 与飞书、微信渠道参考，供开发时查阅。其它后端参考已随单 pi 收敛移除；历史背景见 [需求变更记录](../requirement-changes.md)，不作为当前集成指南
 
 ## 条目规范
 
@@ -12,9 +12,6 @@
 
 | 条目 | 对象 |
 |---|---|
-| `pi-cli.txt` | pi（Pi Coding Agent），默认后端 |
-| `opencode-cli.txt` | opencode，主要备选后端 |
-| `codex-cli.md` | codex，备选后端 |
-| `claude-cli.md` | claude / qodercli，备选后端 |
+| [pi-cli.txt](pi-cli.txt) | pi（Pi Coding Agent），唯一后端 |
 | `feishu-bot-api.md` | 飞书机器人开放平台 |
 | `wechat-ilink.md` | 微信 iLink Bot sidecar |

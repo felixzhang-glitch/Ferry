@@ -1,9 +1,22 @@
 from __future__ import annotations
 
+import os
 from functools import lru_cache
+from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+_LEGACY_KEYS = {
+    "PI_WORK_DIR": "CODEX_WORK_DIR",
+    "PI_STREAM_READ_LIMIT_BYTES": "CODEX_STREAM_READ_LIMIT_BYTES",
+    "PI_MAX_RETRIES": "CODEX_MAX_RETRIES",
+    "PI_RETRY_BACKOFF_SECONDS": "CODEX_RETRY_BACKOFF_SECONDS",
+    "PI_CIRCUIT_BREAKER_THRESHOLD": "CODEX_CIRCUIT_BREAKER_THRESHOLD",
+    "PI_CIRCUIT_BREAKER_COOLDOWN_SECONDS": "CODEX_CIRCUIT_BREAKER_COOLDOWN_SECONDS",
+    "GENERATED_IMAGES_DIR": "CODEX_GENERATED_IMAGES_DIR",
+}
 
 
 def _split_csv(raw: str) -> list[str]:
@@ -21,8 +34,38 @@ class Settings(BaseSettings):
         env_file="conf/.env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        populate_by_name=True,
         extra="ignore",
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
+    ):
+        def legacy_env() -> dict[str, Any]:
+            # Keep legacy keys distinct until validation: a new key in .env must
+            # also win over an old key in the shell, regardless of settings version.
+            values = {**dotenv_settings.env_vars, **env_settings.env_vars}
+            return {
+                old: values[old.lower()]
+                for old in _LEGACY_KEYS.values()
+                if values.get(old.lower()) is not None
+            }
+
+        return init_settings, env_settings, dotenv_settings, file_secret_settings, legacy_env
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_keys(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        data = data.copy()
+        for new, old in _LEGACY_KEYS.items():
+            if new not in data and new.lower() not in data and old in data:
+                value = data[old]
+                # The old key named the parent; PI_WORK_DIR names the final cwd.
+                data[new] = os.path.join(value, "pi") if new == "PI_WORK_DIR" else value
+        return data
 
     feishu_app_id: str = Field(default="", validation_alias="FEISHU_APP_ID")
     feishu_app_secret: str = Field(default="", validation_alias="FEISHU_APP_SECRET")
@@ -39,45 +82,22 @@ class Settings(BaseSettings):
     )
     file_archive_dir: str = Field(default="/data/file", validation_alias="FILE_ARCHIVE_DIR")
 
-    codex_api_base: str = Field(default="https://api.openai.com/v1", validation_alias="CODEX_API_BASE")
-    codex_api_key: str = Field(default="", validation_alias="CODEX_API_KEY")
-    codex_model: str = Field(default="", validation_alias="CODEX_MODEL")
-    codex_cli_bin: str = Field(default="codex", validation_alias="CODEX_CLI_BIN")
-    codex_work_dir: str = Field(default="./runtime/codex-workdir", validation_alias="CODEX_WORK_DIR")
-    codex_generated_images_dir: str = Field(
+    # Historical defaults preserve native pi sessions and existing image discovery.
+    # Renaming configuration never moves or deletes user files.
+    pi_work_dir: str = Field(default="./runtime/codex-workdir/pi", validation_alias="PI_WORK_DIR")
+    generated_images_dir: str = Field(
         default="~/.codex/generated_images",
-        validation_alias="CODEX_GENERATED_IMAGES_DIR",
+        validation_alias="GENERATED_IMAGES_DIR",
     )
-    codex_permission_mode: str = Field(default="full", validation_alias="CODEX_PERMISSION_MODE")
-    codex_timeout_seconds: float = Field(default=300.0, validation_alias="CODEX_TIMEOUT_SECONDS")
-    codex_stream_read_limit_bytes: int = Field(default=262144, validation_alias="CODEX_STREAM_READ_LIMIT_BYTES")
-    codex_max_retries: int = Field(default=2, validation_alias="CODEX_MAX_RETRIES")
-    codex_retry_backoff_seconds: float = Field(default=1.0, validation_alias="CODEX_RETRY_BACKOFF_SECONDS")
-    codex_circuit_breaker_threshold: int = Field(default=5, validation_alias="CODEX_CIRCUIT_BREAKER_THRESHOLD")
-    codex_circuit_breaker_cooldown_seconds: int = Field(
+    pi_stream_read_limit_bytes: int = Field(default=262144, validation_alias="PI_STREAM_READ_LIMIT_BYTES")
+    pi_max_retries: int = Field(default=2, validation_alias="PI_MAX_RETRIES")
+    pi_retry_backoff_seconds: float = Field(default=1.0, validation_alias="PI_RETRY_BACKOFF_SECONDS")
+    pi_circuit_breaker_threshold: int = Field(default=5, validation_alias="PI_CIRCUIT_BREAKER_THRESHOLD")
+    pi_circuit_breaker_cooldown_seconds: int = Field(
         default=30,
-        validation_alias="CODEX_CIRCUIT_BREAKER_COOLDOWN_SECONDS",
+        validation_alias="PI_CIRCUIT_BREAKER_COOLDOWN_SECONDS",
     )
 
-    active_backend: str = Field(default="pi", validation_alias="ACTIVE_BACKEND")
-    backend_state_path: str = Field(default="./runtime/server/backend.json", validation_alias="BACKEND_STATE_PATH")
-    claude_cli_bin: str = Field(default="claude", validation_alias="CLAUDE_CLI_BIN")
-    claude_model: str = Field(default="", validation_alias="CLAUDE_MODEL")
-    claude_permission_mode: str = Field(default="auto", validation_alias="CLAUDE_PERMISSION_MODE")
-    claude_timeout_seconds: float = Field(default=300.0, validation_alias="CLAUDE_TIMEOUT_SECONDS")
-    qodercli_cli_bin: str = Field(default="qodercli", validation_alias="QODERCLI_CLI_BIN")
-    qodercli_model: str = Field(default="", validation_alias="QODERCLI_MODEL")
-    qodercli_permission_mode: str = Field(default="dangerously-skip-permissions", validation_alias="QODERCLI_PERMISSION_MODE")
-    qodercli_timeout_seconds: float = Field(default=300.0, validation_alias="QODERCLI_TIMEOUT_SECONDS")
-    opencode_cli_bin: str = Field(default="opencode", validation_alias="OPENCODE_CLI_BIN")
-    opencode_model: str = Field(default="", validation_alias="OPENCODE_MODEL")
-    opencode_agent: str = Field(default="", validation_alias="OPENCODE_AGENT")
-    opencode_timeout_seconds: float = Field(default=300.0, validation_alias="OPENCODE_TIMEOUT_SECONDS")
-    opencode_idle_timeout_seconds: float = Field(default=120.0, validation_alias="OPENCODE_IDLE_TIMEOUT_SECONDS")
-    opencode_session_store_path: str = Field(
-        default="./runtime/server/opencode-sessions.json",
-        validation_alias="OPENCODE_SESSION_STORE_PATH",
-    )
     pi_cli_bin: str = Field(default="pi", validation_alias="PI_CLI_BIN")
     pi_model: str = Field(default="", validation_alias="PI_MODEL")
     # pi resolves "$DASHSCOPE_API_KEY" from models.json at request time, so the
@@ -95,7 +115,6 @@ class Settings(BaseSettings):
         validation_alias="PI_SESSION_STORE_PATH",
     )
 
-    max_history_rounds: int = Field(default=50, validation_alias="MAX_HISTORY_ROUNDS")
     streaming_enabled: bool = Field(default=True, validation_alias="STREAMING_ENABLED")
     feishu_message_chunk_chars: int = Field(default=1500, validation_alias="FEISHU_MESSAGE_CHUNK_CHARS")
     # Feishu caps im/v1/files at 30 MB, the tighter of the two channels.
@@ -146,10 +165,6 @@ class Settings(BaseSettings):
     def memory_always_inject_list(self) -> list[str]:
         """Categories injected into every turn's context."""
         return _split_csv(self.memory_always_inject)
-
-    @property
-    def codex_chat_completions_url(self) -> str:
-        return f"{self.codex_api_base.rstrip('/')}/chat/completions"
 
     @property
     def feishu_tenant_token_url(self) -> str:

@@ -1,6 +1,6 @@
 # pi CLI 参考
 
-pi（Pi Coding Agent，https://pi.dev）是 codeClaw 的默认后端。本机版本 0.84.2。
+pi（Pi Coding Agent，https://pi.dev）是 codeClaw 的唯一后端。下文协议行为基于既有 0.84.2 验证记录；2026-09-11 用本机 `pi --version`、`pi --help` 核对版本与参数，未重新请求真实模型或渠道
 
 ## 基本用法
 
@@ -68,16 +68,17 @@ pi --mode json --session-id <id> [--model <provider/model>] \
 | 参数 | codeClaw 的用法 |
 |------|-----------------|
 | `--mode json` | 输出 JSONL 事件流，逐行读 stdout |
-| `--session-id` | 会话 ID **由 codeClaw 生成**（uuid4 hex），按 `user_id:chat_id` 维度持久化后复用 |
-| `--append-system-prompt` | 规则、长期记忆与时钟的注入通道，等价于 opencode 的 `instructions[]`。值可以是文件路径（读内容），也可以是直接给的文本——时间走文本，每轮进程新生成一次 |
+| `--session-id` | 会话 ID **由 codeClaw 生成**（uuid4 hex），按渠道会话 key 持久化后复用 |
+| `--append-system-prompt` | 规则、长期记忆与时钟的每轮注入通道。值可以是文件路径（读内容），也可以是直接给的文本——时间走文本，每轮进程新生成一次 |
 | `--approve` | 非交互模式不弹信任提示，默认按 `defaultProjectTrust: ask` **忽略**项目级资源，需显式信任 |
 | `--tools` | 留空不传。它是 allowlist，传了会把扩展工具一起排除 |
 
-- 工作目录：`CODEX_WORK_DIR/pi/`
-- 输出读取：逐行 stdout，单行 idle 超时由 `PI_IDLE_TIMEOUT_SECONDS` 控制
-- 会话管理：pi 自行管理上下文窗口与压缩，codeClaw 不介入
-- 技能：由 codeClaw 扫 `SKILL_ROOTS` 生成摘要注入 prompt（仅首轮），模型再用内建 `read` 读 SKILL.md 正文
-- 时间感知：pi 不加载 opencode 的 `hooks/inject-time.js`，改由 `app/clock.py` 生成时间文本、经 `--append-system-prompt` 走 system 通道。**不拼 prompt 首行**：pi 会把 user 文本写进自己的 transcript，拼在 prompt 里的时间戳每轮留一份（微信主会话实测累积到 327 个），既稀释注意力又会被压缩进摘要；system 通道每轮全新、不落 transcript、不参与压缩
+- 装配：`app.main` 直接实例化 `PiCliClient`；`core.agent.types` 提供 `AgentClient` Protocol 与异常；不再经过路由器
+- 工作目录：`PI_WORK_DIR` 是最终 cwd，默认 `./runtime/codex-workdir/pi`；未设新键时兼容旧 `<CODEX_WORK_DIR>/pi`
+- 输出读取：逐行 stdout，单行 idle 超时由 `PI_IDLE_TIMEOUT_SECONDS` 控制；每次 CLI 尝试还受总时限约束，见 [可靠性说明](../RELIABILITY.md)
+- 会话管理：pi 自行管理历史与压缩，客户端维护 key → pi ID 映射；两个渠道每轮只传当前 user，`SessionManager` 仅存 key 与待处理附件
+- 技能：`app.skills` 扫 `SKILL_ROOTS` 生成首轮摘要，模型再用内建 `read` 读 SKILL.md 正文，不依赖其它 CLI
+- 时间感知：`app/clock.py` 生成文本，经 `--append-system-prompt` 走 system 通道，不拼 prompt 首行，避免时间戳在 transcript 中逐轮累积或进入压缩摘要
 
 ## 配置项
 
@@ -91,9 +92,32 @@ pi --mode json --session-id <id> [--model <provider/model>] \
 | `PI_CODING_AGENT_DIR` | （空） | pi 配置目录，留空用默认 `~/.pi/agent` |
 | `PI_OFFLINE` | `true` | 关闭启动期版本检查与遥测，降低每轮冷启动延迟 |
 | `PI_APPROVE_PROJECT` | `true` | 是否传 `--approve` |
-| `PI_TIMEOUT_SECONDS` | `300` | 单轮总超时 |
+| `PI_TIMEOUT_SECONDS` | `300` | 每次 CLI 尝试的总时限，包含退出等待，不包含排队、退避与此前尝试 |
 | `PI_IDLE_TIMEOUT_SECONDS` | `120` | 单行 stdout idle 超时 |
-| `PI_SESSION_STORE_PATH` | `./runtime/server/pi-sessions.json` | session ID 持久化 |
+| `PI_SESSION_STORE_PATH` | `./runtime/server/pi-sessions.json` | session ID 映射持久化 |
+| `PI_WORK_DIR` | `./runtime/codex-workdir/pi` | 最终 cwd，不再自动追加 `/pi` |
+| `PI_STREAM_READ_LIMIT_BYTES` | `262144` | stdout 读取缓冲上限 |
+| `PI_MAX_RETRIES` | `2` | 客户端重试上限 |
+| `PI_RETRY_BACKOFF_SECONDS` | `1.0` | 重试退避基数 |
+| `PI_CIRCUIT_BREAKER_THRESHOLD` | `5` | 熔断失败阈值 |
+| `PI_CIRCUIT_BREAKER_COOLDOWN_SECONDS` | `30` | 熔断冷却时间 |
+| `GENERATED_IMAGES_DIR` | `~/.codex/generated_images` | 既有生成图片发现目录，保留默认路径不代表依赖 Codex CLI |
+
+### 旧配置迁移
+
+新键优先；仅以下共享旧键保留回退，非其它后端恢复入口：
+
+| 新键 | 旧键回退 |
+|------|----------|
+| `PI_WORK_DIR` | `CODEX_WORK_DIR` 的值追加 `/pi`，保留旧 cwd 语义 |
+| `PI_STREAM_READ_LIMIT_BYTES` | `CODEX_STREAM_READ_LIMIT_BYTES` |
+| `PI_MAX_RETRIES` | `CODEX_MAX_RETRIES` |
+| `PI_RETRY_BACKOFF_SECONDS` | `CODEX_RETRY_BACKOFF_SECONDS` |
+| `PI_CIRCUIT_BREAKER_THRESHOLD` | `CODEX_CIRCUIT_BREAKER_THRESHOLD` |
+| `PI_CIRCUIT_BREAKER_COOLDOWN_SECONDS` | `CODEX_CIRCUIT_BREAKER_COOLDOWN_SECONDS` |
+| `GENERATED_IMAGES_DIR` | `CODEX_GENERATED_IMAGES_DIR` |
+
+后端选择配置与状态文件不再参与运行；渠道、记忆和 provider 凭证继续保留。不要自动迁移现有 cwd、`PI_SESSION_STORE_PATH` 或 `PI_CODING_AGENT_DIR`，更不能删除旧运行目录或用户数据；pi 会话按 cwd 组织，换目录可能破坏续接。完整边界见 [单 pi 接入](../routing.md)
 
 ## 自定义模型注册（阿里云百炼）
 
@@ -152,9 +176,6 @@ codeClaw 侧由 `PI_THINKING` 控制，默认 `high`，经 [pi_cli.py](../../lib
 想加深推理只有 `xhigh`/`max` 有效，代价是延迟和 token 上升。因为该模型默认就开思考，
 `PI_THINKING=high` 与服务端默认等效，只是把档位变得显式且可调；`PI_THINKING=off` 则关思考。
 
-这与 opencode 侧同源：opencode 用 `~/.config/opencode/opencode.jsonc` 里的 `options.reasoningEffort`（见
-[opencode-cli.txt](opencode-cli.txt) 推理强度一节），两者映射一致。
-
 ## 上下文自动压缩
 
 压缩由 pi 自己承担（`core/compaction`），codeClaw 零参与。参数写在 `~/.pi/agent/settings.json`，
@@ -181,9 +202,9 @@ codeClaw 侧由 `PI_THINKING` 控制，默认 `high`，经 [pi_cli.py](../../lib
   模式尤其重要）。另有 overflow 分支：LLM 报上下文溢出时先压缩再自动重试。
 - 历史实测：微信主会话在 128K 窗口时以 111,616 为阈值，2026-08-07（tokensBefore=112641）与
   2026-08-14（111738）各触发一次，阈值公式已被真实数据验证。
-- 注意：codeClaw 的 `/compact` 命令压的是它自己 SessionManager 的 rounds，而 pi 路径下
-  只发最后一条用户消息，所以 `/compact` 对 pi 的真实上下文是空操作；真要清上下文用 `/new`
-  或 `/reset`（会删掉 session_key → pi session id 映射，下轮新建 pi 会话）。
+- codeClaw 的 `/compact`、`/compress` 仅提示上下文由 pi 原生管理，不执行压缩，也不伪报成功。
+  `SessionManager` 已无 rounds 或手工摘要；需要新上下文时用 `/new`、`/reset`，清附件通知与
+  session_key → pi ID 映射，下轮创建新会话，pi 侧旧 transcript 保留。`/backend`、`/pi` 只读状态。
 - 注入的 system prompt（`--append-system-prompt` 的 rules + memory + 时钟，约 5.5KB）**不参与压缩**，
   压缩只处理会话消息，它每轮都在场。时钟走这条通道正是看中这点：压缩不会把它折进摘要，
   也不会像 prompt 内联那样在 transcript 里留下几百个互相矛盾的旧时间戳。
@@ -213,8 +234,8 @@ codeClaw 侧的三条解析规则：
 1. 只取 `message_update.assistantMessageEvent.text_delta` 的 `delta` 直接输出，
    `thinking_delta` / `toolcall_delta` 一律丢弃，思考不进回复。
 2. `message_end` 必须判 `message.role == "assistant"`，否则会把用户的提问当回复回显。
-3. **`--mode json` 的退出码恒为 0**，认证失败也是 0。成败只能看
-   `message_end.message.stopReason`（`error` / `aborted`）与 `errorMessage`。实测：
+3. **`--mode json` 的 provider 失败也可能退出 0**，不能只靠退出码判断成功；还要检查
+   `message_end.message.stopReason`（`error` / `aborted`）与 `errorMessage`，非零退出同样报错。既有验证示例：
 
 ```json
 {"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error",
@@ -233,42 +254,14 @@ pi 在**同一个进程内**会 auto-retry：第一次尝试可能 `stopReason=e
   **即使前面已经流出了部分文本**——否则被截断的半截回答会当完整回答发给用户。
 - 中间尝试的失败不算失败。不能写成“出现任何错误事件就报错”，那会把重试成功的轮次误判为失败。
 - 一条 text_delta 都没有时，用 `message_end.message.content[].text` 兜底输出。
-- 流结束却从未出现 `agent_settled` 且无任何输出，同样按失败处理（宁可误报，不可静默回空）。
-
-## 与 opencode 的差异
-
-| 维度 | pi | opencode |
-|------|----|----------|
-| 流式增量 | 原生 delta，`delta` 只含新增后缀 | `text` 事件带累积全文，需按 `part.id` 自行 diff |
-| 会话 ID | `--session-id` 由调用方指定，不存在则创建 | 首轮不传 `--session`，从事件流反解 |
-| 会话存储 | `~/.pi/agent/sessions/` 下按 cwd 分目录的 JSONL 树 | SQLite（`~/.local/share/opencode/opencode.db`） |
-| 退出码 | **恒为 0**，错误只在事件流里 | 失败时非 0 |
-| 规则注入 | `--append-system-prompt`（可传文件路径） | `OPENCODE_CONFIG_CONTENT.instructions[]` |
-| 内建工具 | read / bash / edit / write（grep / find / ls 默认关） | 另有 webfetch / websearch / task / todowrite / lsp |
-| MCP | 不支持（官方明确不做，需第三方扩展） | 原生支持 |
-| 权限系统 | 无（官方立场：自己容器化） | `--permissions` 白名单 |
-| 插件 | TS extension（无法加载 opencode 的 `plugin`） | `plugin: ["file://..."]` |
-| 运行时 | Node ≥ 22.19.0 | Bun 单二进制 |
+- 流结束后没有任何可用输出即按失败处理，即使出现了 `agent_settled` 也不能静默回空。
 
 ## supervisor 下的注意事项
 
-1. **`PI_CLI_BIN` 必须写绝对路径 `/root/.local/bin/pi`。** `bin/run-app` 硬编码的 `PATH` 是
-   `/root/.opencode/bin:/root/.nvm/versions/node/v20.19.4/bin:/root/.pyenv/versions/3.10.13/bin:$PATH`，
-   **不含 `/root/.local/bin`**，写 `PI_CLI_BIN=pi` 会 command not found。
-2. **node 版本靠 wrapper 兜住。** 上述 PATH 里的 node 是 v20.19.4，低于 pi 要求的 22.19。
-   `/root/.local/bin/pi` 是一个把 node 钉在 v22.23.2 的 shell wrapper：
-
-   ```sh
-   #!/bin/sh
-   NODE22=/root/.nvm/versions/node/v22.23.2
-   exec "$NODE22/bin/node" "$NODE22/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js" "$@"
-   ```
-
-   所以不要让 `pi update --self` 把它覆盖成 npm 原生 shim（`PI_OFFLINE=1` 已关掉启动期网络）。
-3. **spawn 必须 `stdin=DEVNULL`。** supervisor 给主进程的 stdin 是永不关闭的 pipe，而 pi 会把管道
-   stdin 并入首条 prompt，继承后会一直等 EOF 而不开跑。同理需要 `start_new_session=True` +
-   `os.killpg`，否则 `/stop` 只杀 pi 主进程，它启的 bash 子进程会漏成孤儿。
-4. `environment=HOME="/root"`，所以 `~/.pi/agent` 在服务进程下确定解析到 `/root/.pi/agent`。
+1. 为 `PI_CLI_BIN` 配置服务账号可执行的 pi 路径，生产优先用绝对路径；不要依赖交互 shell 的 PATH。启动只需 pi，不检查其它 agent CLI
+2. 确认服务环境的 Node 满足已安装 pi 版本要求（0.84.2 要求 Node ≥ 22.19.0）。若现有 pi 使用固定 Node 版本的 wrapper，不要在此次收敛中覆盖或迁移它
+3. spawn 使用 `stdin=DEVNULL`，避免继承 supervisor 未关闭的 stdin pipe 导致 pi 等待 EOF；使用独立进程组并按 trace_id 取消，以回收 pi 启动的子进程。回收与超时行为需要隔离测试
+4. 保持服务 HOME、现有 cwd、`PI_CODING_AGENT_DIR` 与 session store 路径不变；留空 agent dir 时 pi 使用服务账号的 `~/.pi/agent`。本次不修改真实配置、用户数据或重启服务
 
 ## 参考链接
 

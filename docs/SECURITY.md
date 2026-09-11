@@ -17,7 +17,7 @@
 
 - 敏感数据清单：`conf/.env`（飞书 / 微信凭证、模型 API key）、`rules/admin.md`（管理员 user_id 等）、`secret-allowlist.local.txt`（扫描白名单，gitignored）、`conf/wechat/account.json`
 - 脱敏要求：推送 GitHub 前检查 `rules/`、`conf/`、`.qoder/` 下是否有用户敏感信息
-- 备份策略：`TODO: 待补充`（当前无自动备份，`~/.pi/agent/` 等配置改动前手工 `.bak`）
+- 备份策略：`TODO: 待补充`（当前无自动备份）；现有 pi cwd、session 映射与 `PI_CODING_AGENT_DIR` 中的会话数据不自动迁移或删除，后续人工变更前应同时备份这些恢复条件
 
 ## 已知风险与例外
 

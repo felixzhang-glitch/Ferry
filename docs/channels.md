@@ -9,7 +9,7 @@ lark-oapi SDK (WebSocket 长连接) → FeishuWsClient → FeishuWebhookHandler.
                                                           ↓
                                                事件解析 → 命令/消息分发
                                                           ↓
-                                               AgentRouter → 回复（Markdown 卡片 / 图片）
+                                               PiCliClient → 回复（Markdown 卡片 / 图片）
 ```
 
 ### 接入方式：长连接模式
@@ -47,7 +47,7 @@ lark-oapi SDK (WebSocket 长连接) → FeishuWsClient → FeishuWebhookHandler.
 
 - **消息类型**：私聊文本 + 图片；群聊 @ 触发（`FEISHU_GROUP_REQUIRE_MENTION`）
 - **回复格式**：Markdown 卡片渲染，失败自动降级纯文本；超长文本智能分段（保留代码块/段落边界）
-- **图片处理**：接收图片（下载到本地交给后端）+ 发送图片（识别 CLI 输出中的本地路径自动上传）
+- **图片处理**：接收图片（下载到本地交给 pi）+ 发送图片（识别 CLI 输出中的本地路径自动上传）；生成图片发现使用 `GENERATED_IMAGES_DIR`，兼容旧 `CODEX_GENERATED_IMAGES_DIR`，不依赖 Codex CLI
 - **文件处理**：接收文件归档到 `FILE_ARCHIVE_DIR` 并回执「已收藏」，同时排入会话通知（见下文「入站文件与会话」）；发送文件走 `im/v1/files` 上传 + `msg_type:file`，由统一入口 `/push/file` 触发
 - **Quick Ack**：收到消息立即发 Typing reaction，最终答案汇总后单条回复
 
@@ -75,7 +75,7 @@ iLink Bot API ← 长轮询 ← wechat-sidecar.mjs (Node.js)
                                     ↓
                         POST /webhook/wechat (本地 HTTP)
                                     ↓
-                        WechatWebhookHandler → AgentRouter → 文本回复
+                        WechatWebhookHandler → PiCliClient → 文本回复
                                     ↓
                         POST iLink Bot 发送接口 ← sidecar 代发
 ```
@@ -131,9 +131,7 @@ curl -X POST http://127.0.0.1:8080/push/file \
 
 ## 入站文件与会话
 
-早期两个渠道的入站文件都是「归档 + 回执 + 提前 return」，`append_round` 永远轮不到执行，agent 完全不知道用户发过文件 —— 用户只能自己把归档路径粘回对话里。
-
-现在的链路：
+两个渠道每轮只向 pi 传当前 user 消息，历史由 pi 管理；`SessionManager` 不再保存历史。入站附件通过待处理通知搭载到 user 文本：
 
 ```
 文件到达 → 归档到 FILE_ARCHIVE_DIR → 回执「已收藏」
@@ -141,7 +139,7 @@ curl -X POST http://127.0.0.1:8080/push/file \
         → 用户下一次开口时，通知注入该轮 user 文本
 ```
 
-**为什么注入下一轮而不是写 `append_round`**：pi 用原生 session，`_build_native_prompt` 只取最后一条 user 消息，其余历史在 pi 自己的 session 文件里。写进 codeClaw 的 `rounds` 对 pi 后端完全无效。搭载下一轮 user 文本才能对所有后端一致生效
+**为什么注入下一轮**：pi 只接收当前 user 消息，历史保存在 pi 原生 session 中。codeClaw 只维护 key 与附件通知，不另存对话副本；搭载下一轮 user 文本才能把附件路径送到 pi
 
 **为什么到达时不唤醒 agent**：唤醒就意味着 agent 会去读文件。用户发个文件存档，不该被自动展开分析一遍（4MB PDF 白烧一次配额）。通知头部已写明「仅当本轮确实需要时才读取」
 

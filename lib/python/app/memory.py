@@ -9,8 +9,8 @@ It does two things:
 
 1. Renders the block that gets injected into every turn (write protocol +
    resident categories + an index of the on-demand ones). The protocol has to
-   be resident because the opencode preamble is only sent on a session's first
-   turn, so a first-turn-only injection would stop working from turn two.
+   be resident in pi's system prompt on every turn, rather than relying on a
+   first-turn preamble that can disappear during native context compaction.
 2. Keeps `MEMORY_DIR` under a local-only git repo (no remote) so a mistaken
    agent write stays reviewable and revertible. The git dir lives outside the
    worktree (`MEMORY_GIT_DIR`, under runtime/): an embedded `memory/.git`

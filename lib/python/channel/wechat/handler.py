@@ -18,10 +18,9 @@ from app.commands import (
     process_command,
 )
 from app.config import Settings
+from app.skills import build_skill_summary
 from channel.feishu.formatting import normalize_reply_text, split_message_text
-from core.agent.claude_cli import ClaudeCliClient
-from core.agent.types import BackendClient
-from core.codex.client import CodexClientCancelled
+from core.agent.types import AgentClient, AgentClientCancelled
 from core.session.daily_scheduler import DailyTaskScheduler
 from core.session.deduplicator import MessageDeduplicator
 from core.session.manager import SessionManager, apply_pending_notices, format_file_notice
@@ -54,7 +53,7 @@ class WeChatWebhookHandler:
     def __init__(
         self,
         settings: Settings,
-        codex_client: BackendClient,
+        agent_client: AgentClient,
         session_manager: SessionManager,
         deduplicator: MessageDeduplicator,
         task_registry: ActiveTaskRegistry,
@@ -62,7 +61,7 @@ class WeChatWebhookHandler:
         message_queue: SessionMessageQueue | None = None,
     ) -> None:
         self._settings = settings
-        self._codex_client = codex_client
+        self._agent_client = agent_client
         self._sessions = session_manager
         self._deduplicator = deduplicator
         self._task_registry = task_registry
@@ -141,13 +140,13 @@ class WeChatWebhookHandler:
             event.text,
             session_manager=self._sessions,
             session_key=session_key,
-            router=self._codex_client,
+            agent_client=self._agent_client,
         )
         if command is not None:
             return self._split_reply(command.reply_text)
 
         if normalized_text == "/skills":
-            skills = await asyncio.to_thread(ClaudeCliClient._build_skill_summary)
+            skills = await asyncio.to_thread(build_skill_summary)
             if not skills:
                 return self._split_reply("当前本机未发现可用 skills。")
             return self._split_reply(f"当前本机可用 skills:\n{skills}")
@@ -176,13 +175,11 @@ class WeChatWebhookHandler:
             raise
 
     async def _run_llm_job(self, event: WeChatTextMessageEvent, session_key: str, trace_id: str) -> list[str]:
-        history_messages = self._sessions.build_messages(session_key)
-
         started = self._task_registry.start(
             key=session_key,
             trace_id=trace_id,
             message_id=event.message_id,
-            cancel_callback=lambda: self._codex_client.cancel(trace_id),
+            cancel_callback=lambda: self._agent_client.cancel(trace_id),
         )
         if not started:
             return self._split_reply("当前已有任务在运行中。发送 /stop 可强制终止后再试。")
@@ -190,26 +187,25 @@ class WeChatWebhookHandler:
         # Drain only once the turn is committed, so a rejected turn keeps the
         # notices queued for the next one.
         user_text = apply_pending_notices(event.text, self._sessions.take_pending_files(session_key))
-        messages = history_messages + [{"role": "user", "content": user_text}]
+        messages = [{"role": "user", "content": user_text}]
 
         try:
             if self._settings.streaming_enabled:
                 parts: list[str] = []
-                async for piece in self._codex_client.chat_stream(
+                async for piece in self._agent_client.chat_stream(
                     messages=messages, trace_id=trace_id, session_key=session_key
                 ):
                     parts.append(piece)
                 answer = "".join(parts).strip()
             else:
-                answer = await self._codex_client.chat(
+                answer = await self._agent_client.chat(
                     messages=messages, trace_id=trace_id, session_key=session_key
                 )
 
             if not answer.strip():
                 answer = "(空响应)"
-            self._sessions.append_round(key=session_key, user=user_text, assistant=answer)
             return self._split_reply(answer)
-        except CodexClientCancelled:
+        except AgentClientCancelled:
             logger.info("wechat message cancelled by user", extra={"trace_id": trace_id, "event": "wechat.cancel"})
             return self._split_reply("当前任务已终止。")
         except Exception:

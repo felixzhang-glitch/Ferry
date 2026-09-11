@@ -1,43 +1,38 @@
 # 核心设计信念
 
-## CLI-native（原 opencode-first）
+## pi-native
 
-codeClaw 的核心后端是一个具备原生会话管理的 CLI agent。设计判断标准不变：**如果一个能力后端 CLI 原生支持，codeClaw 不重复实现。**
+codeClaw 只接入 pi。判断标准：**pi 原生支持的能力，桥接层不重复实现**
 
-默认后端自 2026-08-04 起为 **pi**（Pi Coding Agent），opencode 降为可切换备选。信念本身没变，变的只是承载它的 CLI —— 所以这一节按“默认后端”而不是按 opencode 来读。
-
-具体表现：
-
-- **会话记忆**：pi 后端走原生 `--session-id` 持久化（opencode 走 `--session`），上下文管理、超限压缩全部交给后端自行处理。codeClaw 只负责维护 session ID 的映射关系（`user_id:chat_id` -> 后端 session id）。区别只在于 ID 归谁生成：pi 的 `--session-id` 接受任意 ID 并按需创建，所以由 codeClaw 生成；opencode 只能从事件流里反解。
-- **工具调用**：后端支持的文件操作、代码执行、搜索等能力，codeClaw 不封装也不代理。
-- **上下文压缩**：后端自管上下文窗口，codeClaw 不介入。`/compact` 在这两个后端下都不需要 codeClaw 出手。
-
-备选后端（codex/claude/qodercli）因为不具备原生会话管理能力，codeClaw 才为它们维护 FIFO 历史拼接。
-
-### 这条信念的边界：后端不支持的，codeClaw 才补
-
-pi 明确不做 MCP、子 agent、内建权限系统、webfetch/websearch，也不加载 opencode 的 `plugin`。落到 codeClaw 上只补了一处：时间感知从 `hooks/inject-time.js`（opencode 插件）换成 pi 既有的 `--append-system-prompt`——和规则、记忆同一条通道，没有为时间单开机制。skills 摘要与规则、记忆注入同样是所有后端共用的既有注入点。
+- **会话记忆**：`PiCliClient` 维护会话 key → pi session ID 映射，pi 原生 `--session-id` 负责持久化；两渠道每轮只发当前 user 消息
+- **上下文压缩**：pi 原生管理，不再维护 FIFO 历史或手工摘要；`/compact`、`/compress` 只给说明，不假装完成压缩
+- **工具调用**：文件操作、代码执行等由 pi 承担，codeClaw 不封装工具执行框架
+- **规则、记忆与时间**：复用 `--append-system-prompt` 每轮注入，时间不拼进 user transcript；skills 发现与摘要归 `app.skills`
 
 ## 桥接不膨胀
 
-codeClaw 的职责边界：
+codeClaw 的职责：
 
-- 消息收发（飞书 Webhook / 微信 Sidecar）
-- 后端路由切换（运行时命令切换 + 状态持久化）
-- 渠道适配（Markdown 卡片渲染、超长文本分段、图片上传）
-- 命令系统（/help /new /stop /backend /remind 等轻量命令）
+- 消息收发与渠道适配：飞书 WS / Webhook、微信 Sidecar、格式化、分段、图片与文件
+- 会话 key、附件通知、去重、消息队列与任务取消
+- pi 进程生命周期及会话映射，不再提供后端路由或切换状态
+- `/help`、`/new`、`/reset`、`/stop`、`/backend`、`/pi`、定时与技能查询等轻量命令
+- 保留长期记忆、每日任务、定时提醒及渠道既有能力边界
 
 不做的事：
 
-- 不做 prompt engineering（原文透传给后端）
-- 不做 RAG / 知识库（后端 CLI 有自己的上下文管理）
-- 不做多租户 / 权限管理（个人项目，单实例）
-- 不做 agent 编排 / workflow 引擎
+- 不做 prompt engineering、RAG、workflow 引擎
+- 不为预想中的后端扩展保留路由框架；轻量 `AgentClient` Protocol 只服务渠道契约与测试替身
+- 不做多租户、外部存储或多实例编排
+- 不维护其它 CLI 后端，旧命令只提示已移除
+
+## 兼容优先，不搬运行数据
+
+配置名称收敛不等于移动目录。`PI_WORK_DIR` 是最终 cwd，默认继续使用 `./runtime/codex-workdir/pi`，保留旧共享键迁移回退。现有 pi cwd、session store、agent dir 不自动迁移，旧状态文件、用户附件与记忆不删除
 
 ## 个人项目简洁优先
 
-- 单实例部署，无需容器编排
-- 文件持久化（JSON），不引入 Redis/DB
-- 配置通过 .env 管理，不上 config server
-- 测试覆盖核心链路，不追求 100% coverage
-- 文档服务于自己和 AI agent 理解项目，不做外部用户文档
+- 单实例部署，文件持久化，不引入 Redis/DB
+- 配置通过 `.env` 管理，不上 config server
+- 测试覆盖核心链路，不追求 100% coverage；未运行的测试不得标通过
+- 文档描述当前契约，历史分析与历史验证明确标注；不把配置项存在当成可靠性保证

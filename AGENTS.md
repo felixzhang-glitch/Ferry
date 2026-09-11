@@ -2,7 +2,7 @@
 
 ## 项目核心描述
 
-个人 IM → CLI 桥接服务：飞书 + 微信双通道接入，把消息送到本机 CLI agent（默认 pi），再把回复送回来。能力归 agent，编排归 harness——不造智能，只做消息收发、渠道适配与后端路由。技术栈：Python 3.13+ / FastAPI / httpx / pydantic-settings / cryptography，微信侧为 Node.js sidecar。
+个人 IM → CLI 桥接服务：飞书 + 微信双通道接入，把消息送到唯一后端 pi，再把回复送回来。能力归 pi，编排归 harness——不造智能，只做消息收发、渠道适配与 pi 进程管理。技术栈：Python 3.13+ / FastAPI / httpx / pydantic-settings / cryptography，微信侧为 Node.js sidecar。
 
 ## 一级指令
 
@@ -27,21 +27,19 @@
 
 ```
 lib/python/
-  app/            → FastAPI 入口(main)、配置(config)、命令分发(commands)、规则热加载(rules)、日志
+  app/            → FastAPI 入口(main)、配置(config)、命令分发(commands)、skills 发现(skills)、记忆(memory)、日志
   channel/feishu/ → 飞书渠道全链路：webhook 解析(handler)、WS 长连接(ws_client)、
                     安全校验(security)、消息回发(client)、格式化(formatting)、图片(media)
   channel/wechat/ → 微信渠道处理（接收 sidecar 转发的消息）
-  core/agent/     → 多后端路由器(router) + CLI 客户端封装
-                    （claude_cli 同时承载 claude/qodercli，无独立 qodercli 文件）
-  core/codex/     → Codex CLI 客户端（超时/重试/熔断）
-  core/session/   → 会话管理(manager)、去重(deduplicator)、任务注册(task_registry)、
+  core/agent/     → PiCliClient（原生会话/流式/取消/重试/熔断）与轻量接口和异常(types)
+  core/session/   → 会话隔离与附件通知(manager)、去重(deduplicator)、任务注册(task_registry)、
                     定时提醒(reminder_scheduler)、每日任务(daily_scheduler)、消息队列(message_queue)
 
 lib/js/wechat-sidecar.mjs → 微信 iLink Bot 长轮询 sidecar（Node.js）
 bin/server        → 服务控制（start/stop/restart/status/wx login|start|stop）
 conf/.env.example → 全部配置项及默认值（配置绑定在 lib/python/app/config.py）
-rules/            → 注入后端的规则：AGENTS.md 公共 / admin.md 私有（gitignored）；pi 走 `--append-system-prompt`，opencode 走 `instructions`
-hooks/ skills/    → opencode 时间注入插件（pi 不加载，它在 prompt 首行拼时间）/ 项目级 skills
+rules/            → 注入 pi 的规则：AGENTS.md 公共 / admin.md 私有（gitignored），走 `--append-system-prompt`
+skills/           → 项目级 skills；每轮时间通过 pi system prompt 注入，不落入会话历史
 docs/index.md     → 项目文档索引 **重点，不了解项目的话优先看这里**
 ```
 
@@ -58,7 +56,7 @@ docs/index.md     → 项目文档索引 **重点，不了解项目的话优先�
 | `docs/SECURITY.md` | 安全要求 |
 | `docs/RELIABILITY.md` | 可靠性与运维 |
 | `docs/QUALITY_SCORE.md` | 质量评分 |
-| `docs/references/` | 第三方依赖与外部系统参考（pi / opencode / codex / claude / 飞书 / 微信） |
+| `docs/references/` | 第三方依赖与外部系统参考（pi / 飞书 / 微信） |
 
 ## 开发文档
 

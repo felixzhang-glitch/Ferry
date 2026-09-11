@@ -15,6 +15,7 @@ from fastapi import HTTPException
 
 from app.commands import execute_daily_command, parse_daily_command, parse_reminder_command, process_command
 from app.config import Settings
+from app.skills import build_skill_summary
 from channel.feishu.client import FeishuClient, FeishuClientError
 from channel.feishu.formatting import normalize_reply_text, split_message_text
 from channel.feishu.media import (
@@ -33,9 +34,7 @@ from channel.feishu.security import (
     decrypt_event_payload,
     verify_request_signature,
 )
-from core.agent.claude_cli import ClaudeCliClient
-from core.agent.types import BackendClient
-from core.codex.client import CodexClientCancelled
+from core.agent.types import AgentClient, AgentClientCancelled
 from core.session.daily_scheduler import DailyTaskScheduler
 from core.session.deduplicator import MessageDeduplicator
 from core.session.manager import SessionManager, apply_pending_notices, format_file_notice
@@ -51,7 +50,7 @@ class FeishuWebhookHandler:
         self,
         settings: Settings,
         feishu_client: FeishuClient,
-        codex_client: BackendClient,
+        agent_client: AgentClient,
         session_manager: SessionManager,
         deduplicator: MessageDeduplicator,
         task_registry: ActiveTaskRegistry,
@@ -61,7 +60,7 @@ class FeishuWebhookHandler:
     ) -> None:
         self._settings = settings
         self._feishu_client = feishu_client
-        self._codex_client = codex_client
+        self._agent_client = agent_client
         self._sessions = session_manager
         self._deduplicator = deduplicator
         self._task_registry = task_registry
@@ -149,7 +148,7 @@ class FeishuWebhookHandler:
             event.text,
             session_manager=self._sessions,
             session_key=session_key,
-            router=self._codex_client,
+            agent_client=self._agent_client,
         )
         if command is not None:
             await self._safe_reply(
@@ -162,7 +161,7 @@ class FeishuWebhookHandler:
             return
 
         if normalized_text == "/skills":
-            skills = await asyncio.to_thread(ClaudeCliClient._build_skill_summary)
+            skills = await asyncio.to_thread(build_skill_summary)
             if not skills:
                 reply = "当前本机未发现可用 skills。"
             else:
@@ -226,12 +225,11 @@ class FeishuWebhookHandler:
             )
             return
 
-        history_messages = self._sessions.build_messages(session_key)
         started = self._task_registry.start(
             key=session_key,
             trace_id=trace_id,
             message_id=event.message_id,
-            cancel_callback=lambda: self._codex_client.cancel(trace_id),
+            cancel_callback=lambda: self._agent_client.cancel(trace_id),
         )
         if not started:
             await self._safe_reply(
@@ -245,7 +243,7 @@ class FeishuWebhookHandler:
         # Drain only once the turn is committed, so a rejected turn leaves the
         # notices queued for the next one instead of dropping them.
         user_text = apply_pending_notices(user_text, self._sessions.take_pending_files(session_key))
-        messages = history_messages + [{"role": "user", "content": user_text}]
+        messages = [{"role": "user", "content": user_text}]
         generated_since = time.time()
         delivered_image_paths: list[str] = []
         auto_complete_on_image = self._looks_like_image_request(event.text)
@@ -264,7 +262,7 @@ class FeishuWebhookHandler:
 
         try:
             if self._settings.streaming_enabled:
-                answer = await self._stream_to_feishu(
+                await self._stream_to_feishu(
                     message_id=event.message_id,
                     chat_id=event.chat_id,
                     messages=messages,
@@ -275,7 +273,7 @@ class FeishuWebhookHandler:
                     session_key=session_key,
                 )
             else:
-                answer = await self._codex_client.chat(
+                answer = await self._agent_client.chat(
                     messages=messages, trace_id=trace_id, session_key=session_key
                 )
                 generated_images = []
@@ -297,15 +295,12 @@ class FeishuWebhookHandler:
                     already_sent_image_paths=delivered_image_paths,
                 )
 
-            self._sessions.append_round(key=session_key, user=user_text, assistant=answer)
-        except CodexClientCancelled:
+        except AgentClientCancelled:
             if auto_complete_on_image and delivered_image_paths:
                 logger.info(
-                    "image generation completed before codex final response",
+                    "image generation completed before pi final response",
                     extra={"trace_id": trace_id, "event": "pipeline.image_auto_complete"},
                 )
-                answer = self._format_generated_image_refs(delivered_image_paths)
-                self._sessions.append_round(key=session_key, user=user_text, assistant=answer)
                 return
             logger.info("message cancelled by user", extra={"trace_id": trace_id, "event": "pipeline.cancel"})
             await self._safe_reply(
@@ -342,7 +337,7 @@ class FeishuWebhookHandler:
         start = time.monotonic()
         full_text_parts: list[str] = []
 
-        async for piece in self._codex_client.chat_stream(
+        async for piece in self._agent_client.chat_stream(
             messages=messages, trace_id=trace_id, session_key=session_key
         ):
             full_text_parts.append(piece)
@@ -721,13 +716,13 @@ class FeishuWebhookHandler:
                             delivered_image_paths.remove(image_path)
                         raise
                     logger.info(
-                        "generated image delivered while codex is still running",
+                        "generated image delivered while pi is still running",
                         extra={"trace_id": trace_id, "event": "feishu.generated_image_watch"},
                     )
 
                 if auto_complete_on_image and delivered_image_paths:
                     await asyncio.sleep(0.5)
-                    self._codex_client.cancel(trace_id)
+                    self._agent_client.cancel(trace_id)
                     return
         except asyncio.CancelledError:
             raise
@@ -751,7 +746,7 @@ class FeishuWebhookHandler:
         await asyncio.gather(image_watch_task, return_exceptions=True)
 
     def _find_generated_images_since(self, since: float) -> list[str]:
-        directory = str(getattr(self._settings, "codex_generated_images_dir", "~/.codex/generated_images"))
+        directory = self._settings.generated_images_dir
         # Allow slight clock/order skew between process start and image file write.
         return find_recent_generated_images(directory=directory, since=max(0.0, since - 2.0), until=time.time() + 2.0)
 

@@ -4,12 +4,16 @@ from collections.abc import AsyncIterator
 from typing import Protocol
 
 
-class BackendClient(Protocol):
-    """Protocol shared by CodexClient, ClaudeCliClient and AgentRouter.
+class AgentClientError(RuntimeError):
+    """The agent could not complete a request."""
 
-    Handlers depend on this surface so that any backend client (or the router
-    itself) can be injected as a drop-in replacement.
-    """
+
+class AgentClientCancelled(AgentClientError):
+    """The user cancelled the current request."""
+
+
+class AgentClient(Protocol):
+    """Pi client surface used by channels and their test doubles."""
 
     async def chat(
         self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None
@@ -21,6 +25,6 @@ class BackendClient(Protocol):
 
     def cancel(self, trace_id: str) -> bool: ...
 
-    def reset_backend_session(self, session_key: str) -> None: ...
+    def reset_session(self, session_key: str) -> None: ...
 
     async def close(self) -> None: ...

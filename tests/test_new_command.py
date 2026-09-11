@@ -1,40 +1,27 @@
-from app.commands import parse_reminder_command, process_command
-from core.agent.claude_cli import ClaudeCliClient
+from unittest.mock import Mock
+
+import pytest
+
+from app.commands import HELP_TEXT, build_help_text, parse_reminder_command, process_command
 from core.session.manager import SessionManager
 
 
-class FakeRouter:
-    def __init__(self, active: str = "codex") -> None:
-        self.active = active
-
-    def available(self) -> list[str]:
-        return ["codex", "claude", "qodercli"]
-
-    @staticmethod
-    def label(name: str) -> str:
-        return name
-
-    def switch(self, name: str) -> bool:
-        if name not in self.available():
-            return False
-        self.active = name
-        return True
-
-
-def test_new_command_starts_fresh_session() -> None:
-    manager = SessionManager(max_history_rounds=10)
+@pytest.mark.parametrize("command", ["/new", "/reset", " /NEW ", " /RESET "])
+def test_session_command_clears_attachments_and_resets_pi(command) -> None:
+    manager = SessionManager()
     key = SessionManager.build_key("u1", "c1")
+    manager.note_incoming_file(key, "pending-file")
+    manager.note_incoming_file("other", "other-file")
+    agent_client = Mock(spec=["reset_session"])
 
-    old_session_id = manager.get_or_create(key).session_id
-    manager.append_round(key, "hello", "world")
+    result = process_command(command, manager, key, agent_client=agent_client)
 
-    result = process_command("/new", manager, key)
-
-    assert result is not None
-    assert result.handled is True
-    assert "已创建新会话" in result.reply_text
-    assert manager.round_count(key) == 0
-    assert manager.get_or_create(key).session_id != old_session_id
+    assert result is not None and result.handled
+    expected = "已创建新会话，不再继承历史，待处理附件已清空。" if command.strip().lower() == "/new" else "已清空当前会话上下文及待处理附件。"
+    assert result.reply_text == expected
+    agent_client.reset_session.assert_called_once_with("u1:c1")
+    assert manager.take_pending_files(key) == []
+    assert manager.take_pending_files("other") == ["other-file"]
 
 
 def test_parse_reminder_command() -> None:
@@ -45,61 +32,60 @@ def test_parse_reminder_command() -> None:
     assert result.text == "喝水"
 
 
-def test_compact_command_compresses_session_history() -> None:
-    manager = SessionManager(max_history_rounds=10)
-    key = SessionManager.build_key("u1", "c1")
-    for idx in range(5):
-        manager.append_round(key, f"question {idx}", f"answer {idx}")
+@pytest.mark.parametrize("command", ["/compact", "/compress", "/compact 2"])
+def test_compact_does_not_claim_to_compress_or_reset_pi(command) -> None:
+    manager = SessionManager()
+    manager.note_incoming_file("key", "pending-file")
+    agent_client = Mock(spec=["reset_session"])
 
-    result = process_command("/compact", manager, key)
+    result = process_command(command, manager, "key", agent_client=agent_client)
 
-    assert result is not None
-    assert "已压缩当前会话上下文" in result.reply_text
-    assert manager.round_count(key) == 3
-    messages = manager.build_messages(key)
-    assert "已压缩的历史上下文摘要" in messages[1]["content"]
-    assert messages[-2]["content"] == "question 4"
+    assert result is not None and result.handled
+    assert result.reply_text == "上下文由 pi 自动管理，桥接层不支持手工压缩。"
+    agent_client.reset_session.assert_not_called()
+    assert manager.take_pending_files("key") == ["pending-file"]
 
 
-def test_backend_switch_resets_current_session_history() -> None:
-    manager = SessionManager(max_history_rounds=10)
-    key = SessionManager.build_key("u1", "c1")
-    manager.append_round(key, "列出所有 skills", "Qoder skills")
+@pytest.mark.parametrize("command", ["/backend", "/pi", "/backend claude", "/pi model"])
+def test_pi_is_the_only_backend_and_query_does_not_reset_session(command) -> None:
+    manager = SessionManager()
+    manager.note_incoming_file("key", "pending-file")
+    agent_client = Mock(spec=["reset_session"])
 
-    result = process_command("/claude", manager, key, router=FakeRouter(active="qodercli"))
+    result = process_command(command, manager, "key", agent_client=agent_client)
 
-    assert result is not None
-    assert "已切换后端为 claude" in result.reply_text
-    assert manager.round_count(key) == 0
-
-
-def test_backend_switch_noop_keeps_current_session_history() -> None:
-    manager = SessionManager(max_history_rounds=10)
-    key = SessionManager.build_key("u1", "c1")
-    manager.append_round(key, "hello", "world")
-
-    result = process_command("/claude", manager, key, router=FakeRouter(active="claude"))
-
-    assert result is not None
-    assert "当前已是 claude" in result.reply_text
-    assert manager.round_count(key) == 1
+    assert result is not None and result.handled
+    assert result.reply_text == "当前唯一后端为 pi，不支持切换后端。"
+    agent_client.reset_session.assert_not_called()
+    assert manager.take_pending_files("key") == ["pending-file"]
 
 
-def test_skill_list_request_returns_local_skill_catalog(tmp_path, monkeypatch) -> None:
-    skill_dir = tmp_path / "skills" / "yfinance"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        """---
-name: yfinance
-description: "查询全球股票行情。"
----
-""",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(ClaudeCliClient, "SKILL_ROOTS", (str(tmp_path / "skills"),))
-    manager = SessionManager(max_history_rounds=10)
-    key = SessionManager.build_key("u1", "c1")
+@pytest.mark.parametrize("command", ["/codex", "/claude", "/qodercli", "/opencode"])
+@pytest.mark.parametrize("suffix", ["", " 请执行任务"])
+def test_removed_backend_commands_are_handled_without_resetting(command, suffix) -> None:
+    manager = SessionManager()
+    manager.note_incoming_file("key", "pending-file")
+    agent_client = Mock(spec=["reset_session"])
 
-    result = process_command("/skills", manager, key)
+    result = process_command(command.upper() + suffix, manager, "key", agent_client=agent_client)
 
-    assert result is None  # /skills is now handled in the handler layer, not process_command
+    assert result is not None and result.handled
+    assert "已移除" in result.reply_text
+    assert "唯一后端为 pi" in result.reply_text
+    agent_client.reset_session.assert_not_called()
+    assert manager.take_pending_files("key") == ["pending-file"]
+
+
+def test_help_is_generated_from_one_command_list() -> None:
+    assert HELP_TEXT == build_help_text()
+    assert "/daily" in HELP_TEXT and "/skills" in HELP_TEXT and "/stop" in HELP_TEXT
+    assert "唯一后端 pi" in HELP_TEXT and "自动管理" in HELP_TEXT
+    assert all(command not in HELP_TEXT for command in ("/codex", "/claude", "/qodercli", "/opencode"))
+    assert "微信渠道暂不支持" in build_help_text(include_remind=False)
+    assert process_command("/help", SessionManager(), "key").reply_text == HELP_TEXT
+
+
+def test_skills_and_plain_text_remain_handled_by_channels() -> None:
+    manager = SessionManager()
+    assert process_command("/skills", manager, "key") is None
+    assert process_command("hello", manager, "key") is None

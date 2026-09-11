@@ -5,7 +5,7 @@ import pytest
 
 from channel.feishu.client import FeishuClientError
 from channel.feishu.handler import FeishuWebhookHandler
-from core.codex.client import CodexClientCancelled
+from core.agent.types import AgentClientCancelled
 from core.session.deduplicator import MessageDeduplicator
 from core.session.manager import SessionManager
 from core.session.reminder_scheduler import ReminderScheduler
@@ -109,7 +109,7 @@ class FakeFeishuClient:
         return f"fake received image {image_key}".encode(), "image/png"
 
 
-class FakeCodexClient:
+class FakeAgentClient:
     def __init__(self) -> None:
         self.cancelled = False
 
@@ -125,7 +125,7 @@ class FakeCodexClient:
         return True
 
 
-class RecordingCodexClient(FakeCodexClient):
+class RecordingAgentClient(FakeAgentClient):
     def __init__(self) -> None:
         super().__init__()
         self.messages: list[dict[str, str]] = []
@@ -135,7 +135,7 @@ class RecordingCodexClient(FakeCodexClient):
         yield "收到图片"
 
 
-class ImageCodexClient(FakeCodexClient):
+class ImageAgentClient(FakeAgentClient):
     def __init__(self, image_path: str) -> None:
         super().__init__()
         self._image_path = image_path
@@ -144,18 +144,20 @@ class ImageCodexClient(FakeCodexClient):
         yield f"Generated Image:\nSaved to: file://{self._image_path}"
 
 
-class EmptyImageCodexClient(FakeCodexClient):
+class EmptyImageAgentClient(FakeAgentClient):
     def __init__(self, image_path) -> None:
         super().__init__()
         self._image_path = image_path
 
     async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None):
+        self.messages = messages
+        self.session_key = session_key
         self._image_path.write_bytes(b"fake image")
         if False:
             yield ""
 
 
-class BlockingImageCodexClient(FakeCodexClient):
+class BlockingImageAgentClient(FakeAgentClient):
     def __init__(self, image_path) -> None:
         super().__init__()
         self._image_path = image_path
@@ -165,7 +167,7 @@ class BlockingImageCodexClient(FakeCodexClient):
         self._image_path.write_bytes(b"fake image")
         while not self.cancelled_event.is_set():
             await asyncio.sleep(0.05)
-        raise CodexClientCancelled("auto complete image")
+        raise AgentClientCancelled("auto complete image")
         if False:
             yield ""
 
@@ -175,7 +177,7 @@ class BlockingImageCodexClient(FakeCodexClient):
         return True
 
 
-class WatchRaceImageCodexClient(FakeCodexClient):
+class WatchRaceImageAgentClient(FakeAgentClient):
     def __init__(self, image_path, image_upload_started_event: asyncio.Event) -> None:
         super().__init__()
         self._image_path = image_path
@@ -199,8 +201,8 @@ async def test_handle_text_event_quick_ack_and_single_final_reply() -> None:
     handler = FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=FakeCodexClient(),
-        session_manager=SessionManager(max_history_rounds=10),
+        agent_client=FakeAgentClient(),
+        session_manager=SessionManager(),
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
     )
@@ -220,20 +222,21 @@ async def test_handle_text_event_quick_ack_and_single_final_reply() -> None:
 
 
 @pytest.mark.asyncio
-async def test_handle_image_event_downloads_image_and_passes_local_path_to_codex(tmp_path) -> None:
+async def test_handle_image_event_downloads_image_and_passes_local_path_to_agent(tmp_path) -> None:
     settings = SimpleNamespace(
         streaming_enabled=True,
         feishu_encrypt_key="",
         feishu_verification_token="",
         feishu_received_images_dir=str(tmp_path / "received"),
+        generated_images_dir=str(tmp_path / "generated"),
     )
     feishu_client = FakeFeishuClient()
-    codex_client = RecordingCodexClient()
+    agent_client = RecordingAgentClient()
     handler = FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=codex_client,
-        session_manager=SessionManager(max_history_rounds=10),
+        agent_client=agent_client,
+        session_manager=SessionManager(),
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
     )
@@ -250,8 +253,8 @@ async def test_handle_image_event_downloads_image_and_passes_local_path_to_codex
     await handler._handle_text_event(event=event, trace_id="trace_test")
 
     assert feishu_client.download_image_calls == [("om_image_1", "img_v2_test")]
-    # Images are cleaned up after task completion; verify the path was passed to codex
-    prompt = codex_client.messages[-1]["content"]
+    # Images are cleaned up after task completion; verify the path was passed to agent
+    prompt = agent_client.messages[-1]["content"]
     assert "img_v2_test" in prompt or ".png" in prompt
     assert feishu_client.reply_calls[-1][0] == "收到图片"
 
@@ -263,14 +266,15 @@ async def test_handle_post_event_downloads_all_images_and_keeps_text(tmp_path) -
         feishu_encrypt_key="",
         feishu_verification_token="",
         feishu_received_images_dir=str(tmp_path / "received"),
+        generated_images_dir=str(tmp_path / "generated"),
     )
     feishu_client = FakeFeishuClient()
-    codex_client = RecordingCodexClient()
+    agent_client = RecordingAgentClient()
     handler = FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=codex_client,
-        session_manager=SessionManager(max_history_rounds=10),
+        agent_client=agent_client,
+        session_manager=SessionManager(),
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
     )
@@ -288,14 +292,14 @@ async def test_handle_post_event_downloads_all_images_and_keeps_text(tmp_path) -
     await handler._handle_text_event(event=event, trace_id="trace_test")
 
     assert feishu_client.download_image_calls == [("om_post_1", "img_v2_a"), ("om_post_1", "img_v2_b")]
-    # Images are cleaned up after task completion; verify the paths were passed to codex
-    prompt = codex_client.messages[-1]["content"]
+    # Images are cleaned up after task completion; verify the paths were passed to agent
+    prompt = agent_client.messages[-1]["content"]
     assert "记录午餐" in prompt
     assert "img_v2_a" in prompt or ".png" in prompt
     assert "img_v2_b" in prompt or ".png" in prompt
 
 
-class BlockingCodexClient:
+class BlockingAgentClient:
     def __init__(self) -> None:
         self.cancelled = asyncio.Event()
         self.finished = asyncio.Event()
@@ -307,7 +311,7 @@ class BlockingCodexClient:
         while not self.cancelled.is_set() and not self.finished.is_set():
             await asyncio.sleep(0.01)
         if self.cancelled.is_set():
-            raise CodexClientCancelled("cancelled")
+            raise AgentClientCancelled("cancelled")
         yield "完成"
 
     def cancel(self, trace_id: str) -> bool:
@@ -323,12 +327,12 @@ async def test_stop_command_cancels_active_task() -> None:
         feishu_verification_token="",
     )
     feishu_client = FakeFeishuClient()
-    codex_client = BlockingCodexClient()
+    agent_client = BlockingAgentClient()
     handler = FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=codex_client,
-        session_manager=SessionManager(max_history_rounds=10),
+        agent_client=agent_client,
+        session_manager=SessionManager(),
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
     )
@@ -368,8 +372,8 @@ async def test_reply_fallback_sends_to_chat_when_reply_fails() -> None:
     handler = FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=FakeCodexClient(),
-        session_manager=SessionManager(max_history_rounds=10),
+        agent_client=FakeAgentClient(),
+        session_manager=SessionManager(),
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
     )
@@ -403,8 +407,8 @@ async def test_reminder_command_schedules_chat_message() -> None:
     handler = FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=FakeCodexClient(),
-        session_manager=SessionManager(max_history_rounds=10),
+        agent_client=FakeAgentClient(),
+        session_manager=SessionManager(),
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
         reminder_scheduler=reminder_scheduler,
@@ -433,14 +437,14 @@ async def test_generated_image_path_is_uploaded_and_replied(tmp_path) -> None:
         streaming_enabled=True,
         feishu_encrypt_key="",
         feishu_verification_token="",
-        codex_generated_images_dir=str(tmp_path / "empty_generated_images"),
+        generated_images_dir=str(tmp_path / "empty_generated_images"),
     )
     feishu_client = FakeFeishuClient()
     handler = FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=ImageCodexClient(str(image_path)),
-        session_manager=SessionManager(max_history_rounds=10),
+        agent_client=ImageAgentClient(str(image_path)),
+        session_manager=SessionManager(),
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
     )
@@ -459,7 +463,7 @@ async def test_generated_image_path_is_uploaded_and_replied(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recent_generated_image_is_used_when_codex_output_is_empty(tmp_path) -> None:
+async def test_recent_generated_image_is_used_when_agent_output_is_empty(tmp_path) -> None:
     image_root = tmp_path / "generated_images"
     image_dir = image_root / "run"
     image_dir.mkdir(parents=True)
@@ -468,14 +472,14 @@ async def test_recent_generated_image_is_used_when_codex_output_is_empty(tmp_pat
         streaming_enabled=True,
         feishu_encrypt_key="",
         feishu_verification_token="",
-        codex_generated_images_dir=str(image_root),
+        generated_images_dir=str(image_root),
     )
     feishu_client = FakeFeishuClient()
-    session_manager = SessionManager(max_history_rounds=10)
+    session_manager = SessionManager()
     handler = FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=EmptyImageCodexClient(image_path),
+        agent_client=EmptyImageAgentClient(image_path),
         session_manager=session_manager,
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
@@ -493,8 +497,9 @@ async def test_recent_generated_image_is_used_when_codex_output_is_empty(tmp_pat
     assert feishu_client.reply_calls == []
     assert feishu_client.image_upload_calls == [str(image_path)]
     assert feishu_client.image_reply_calls == [("img_test", "om_test_recent_image-final-image-1")]
-    messages = session_manager.build_messages(SessionManager.build_key("ou_test_1", "oc_test_1"))
-    assert f"file://{image_path}" in messages[-1]["content"]
+    assert handler._agent_client.messages == [{"role": "user", "content": "画一张图"}]
+    assert handler._agent_client.session_key == "ou_test_1:oc_test_1"
+    assert session_manager.take_pending_files("ou_test_1:oc_test_1") == []
 
 
 @pytest.mark.asyncio
@@ -507,14 +512,14 @@ async def test_non_image_request_does_not_pick_up_recent_generated_image(tmp_pat
         streaming_enabled=True,
         feishu_encrypt_key="",
         feishu_verification_token="",
-        codex_generated_images_dir=str(image_root),
+        generated_images_dir=str(image_root),
     )
     feishu_client = FakeFeishuClient()
     handler = FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=EmptyImageCodexClient(image_path),
-        session_manager=SessionManager(max_history_rounds=10),
+        agent_client=EmptyImageAgentClient(image_path),
+        session_manager=SessionManager(),
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
     )
@@ -543,15 +548,15 @@ async def test_generated_image_watcher_auto_completes_image_request(tmp_path) ->
         streaming_enabled=True,
         feishu_encrypt_key="",
         feishu_verification_token="",
-        codex_generated_images_dir=str(image_root),
+        generated_images_dir=str(image_root),
     )
     feishu_client = FakeFeishuClient()
-    session_manager = SessionManager(max_history_rounds=10)
-    codex_client = BlockingImageCodexClient(image_path)
+    session_manager = SessionManager()
+    agent_client = BlockingImageAgentClient(image_path)
     handler = FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=codex_client,
+        agent_client=agent_client,
         session_manager=session_manager,
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
@@ -566,7 +571,7 @@ async def test_generated_image_watcher_auto_completes_image_request(tmp_path) ->
 
     await handler._handle_text_event(event=event, trace_id="trace-watch-image")
 
-    assert codex_client.cancelled
+    assert agent_client.cancelled
     assert feishu_client.image_upload_calls == [str(image_path)]
     assert feishu_client.image_reply_calls == [("img_test", "om_test_watch_image-watch-image-1")]
     assert "当前任务已终止" not in [text for text, _ in feishu_client.reply_calls]
@@ -582,17 +587,17 @@ async def test_generated_image_watcher_reserves_path_before_final_scan(tmp_path)
         streaming_enabled=True,
         feishu_encrypt_key="",
         feishu_verification_token="",
-        codex_generated_images_dir=str(image_root),
+        generated_images_dir=str(image_root),
     )
     image_upload_started = asyncio.Event()
     feishu_client = FakeFeishuClient()
     feishu_client.image_upload_started_event = image_upload_started
     feishu_client.image_upload_delay_seconds = 0.1
-    session_manager = SessionManager(max_history_rounds=10)
+    session_manager = SessionManager()
     handler = FeishuWebhookHandler(
         settings=settings,
         feishu_client=feishu_client,
-        codex_client=WatchRaceImageCodexClient(image_path, image_upload_started),
+        agent_client=WatchRaceImageAgentClient(image_path, image_upload_started),
         session_manager=session_manager,
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),

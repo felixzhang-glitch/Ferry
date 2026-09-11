@@ -9,9 +9,9 @@ ENV_FILE="$CONF_DIR/.env"
 ENV_EXAMPLE_FILE="$CONF_DIR/.env.example"
 LOG_DIR="$ROOT_DIR/logs"
 RUNTIME_DIR="$ROOT_DIR/runtime/server"
-CODEX_PID_FILE="$RUNTIME_DIR/codexclaw.pid"
+APP_PID_FILE="$RUNTIME_DIR/codexclaw.pid"
 WECHAT_PID_FILE="$RUNTIME_DIR/wechat-sidecar.pid"
-CODEX_LOG_FILE="$LOG_DIR/codexclaw.log"
+APP_LOG_FILE="$LOG_DIR/codexclaw.log"
 WECHAT_LOG_FILE="$LOG_DIR/wechat-sidecar.log"
 PYTHONPATH_DIR="$ROOT_DIR/lib/python"
 WECHAT_SIDECAR="$ROOT_DIR/lib/js/wechat-sidecar.mjs"
@@ -52,50 +52,79 @@ ensure_env_file() {
   fi
 }
 
+env_python() {
+  if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    printf '%s\n' "$ROOT_DIR/.venv/bin/python"
+  else
+    printf '%s\n' python3
+  fi
+}
+
+# Parse dotenv data, never execute it as shell code. The same parser is used by
+# both launchers; shell variables (including explicit empty values) take priority.
+env_file_values() {
+  "$(env_python)" - "$ENV_FILE" "$@" <<'PY'
+import re
+import sys
+from dotenv.main import DotEnv
+
+values = DotEnv(sys.argv[1], encoding="utf-8", override=False).dict()
+if len(sys.argv) > 2:
+    value = values.get(sys.argv[2])
+    sys.stdout.write(value if value is not None else sys.argv[3])
+else:
+    for key, value in values.items():
+        if value is not None and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            sys.stdout.write(f"{key}\0{value}\0")
+PY
+}
+
 load_env() {
   ensure_env_file
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+  local key value env_fd env_pid
+  exec {env_fd}< <(env_file_values)
+  env_pid=$!
+  while IFS= read -r -d '' key && IFS= read -r -d '' value; do
+    if [[ ! -v "$key" ]]; then
+      export "$key=$value"
+    fi
+  done <&"$env_fd"
+  exec {env_fd}<&-
+  wait "$env_pid" || return $?
   export PYTHONPATH="$PYTHONPATH_DIR${PYTHONPATH:+:$PYTHONPATH}"
   export WECHAT_ACCOUNT_PATH="${WECHAT_ACCOUNT_PATH:-$WECHAT_ACCOUNT_PATH_DEFAULT}"
   export WECHAT_SYNC_BUF_PATH="${WECHAT_SYNC_BUF_PATH:-$WECHAT_SYNC_BUF_PATH_DEFAULT}"
 }
 
 read_env_from_file() {
-  local key="$1"
-  grep -E "^${key}=" "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d'=' -f2- || true
-}
-
-set_env_in_file() {
-  local key="$1"
-  local value="$2"
-  ensure_env_file
-  if grep -qE "^${key}=" "$ENV_FILE"; then
-    sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
-  else
-    echo "${key}=${value}" >> "$ENV_FILE"
-  fi
+  env_file_values "$1" "${2:-}"
 }
 
 get_effective_value() {
   local key="$1"
-  if [[ -n "${!key:-}" ]]; then
-    echo "${!key}"
+  if [[ -v "$key" ]]; then
+    printf '%s' "${!key}"
     return
   fi
-  read_env_from_file "$key"
+  read_env_from_file "$key" "${2:-}"
+}
+
+get_pi_work_dir() {
+  local work_dir legacy_dir
+  legacy_dir="$(get_effective_value CODEX_WORK_DIR ./runtime/codex-workdir)"
+  legacy_dir="${legacy_dir:-.}"
+  work_dir="$(get_effective_value PI_WORK_DIR "${legacy_dir%/}/pi")"
+  "$(env_python)" - "$work_dir" <<'PY'
+import os
+import sys
+print(os.path.abspath(os.path.expanduser(sys.argv[1])))
+PY
 }
 
 ensure_prerequisites() {
   ensure_env_file
   if ! command -v python3 >/dev/null 2>&1; then
     echo "[ERROR] 未找到 python3，请先安装 Python 3.10+"
-    exit 1
-  fi
-  if ! command -v codex >/dev/null 2>&1; then
-    echo "[ERROR] 未找到 codex CLI，请先在 root 环境完成 codex 安装与登录。"
     exit 1
   fi
   if [[ ! -d .venv ]]; then
@@ -107,17 +136,19 @@ ensure_prerequisites() {
   python -m pip install --upgrade pip >/dev/null
   python -m pip install -r conf/requirements.txt >/dev/null
 
-  if [[ -z "$(read_env_from_file CODEX_PERMISSION_MODE)" ]]; then
-    set_env_in_file "CODEX_PERMISSION_MODE" "full"
+  local pi_bin work_dir
+  pi_bin="$(get_effective_value PI_CLI_BIN)"
+  pi_bin="${pi_bin:-pi}"
+  if ! command -v "$pi_bin" >/dev/null 2>&1; then
+    echo "[ERROR] 未找到 pi CLI，请安装 pi 或设置 PI_CLI_BIN。"
+    exit 1
   fi
-  if [[ -z "$(read_env_from_file CODEX_WORK_DIR)" ]]; then
-    set_env_in_file "CODEX_WORK_DIR" "./runtime/codex-workdir"
-  fi
-  mkdir -p "$(get_effective_value CODEX_WORK_DIR)"
-  # git boundary: stop backend CLIs (opencode/codex/claude) from walking up
-  # and injecting the project's AGENTS.md into chat context
-  if [[ ! -e "$(get_effective_value CODEX_WORK_DIR)/.git" ]]; then
-    git -C "$(get_effective_value CODEX_WORK_DIR)" init -q 2>/dev/null || true
+
+  work_dir="$(get_pi_work_dir)"
+  mkdir -p "$work_dir"
+  # Git boundary: keep pi from discovering the parent project's AGENTS.md.
+  if [[ ! -e "$work_dir/.git" ]]; then
+    git -C "$work_dir" init -q 2>/dev/null || true
   fi
 }
 
@@ -161,17 +192,17 @@ stop_pid() {
   echo "[INFO] ${name} 已强制停止"
 }
 
-start_codexclaw() {
+start_app() {
   local foreground="${1:-0}"
   ensure_dirs
   ensure_prerequisites
   load_env
 
-  if pid_is_running "$CODEX_PID_FILE"; then
-    echo "[INFO] codeClaw 已在运行，PID=$(cat "$CODEX_PID_FILE")"
+  if pid_is_running "$APP_PID_FILE"; then
+    echo "[INFO] codeClaw 已在运行，PID=$(cat "$APP_PID_FILE")"
     return 0
   fi
-  rm -f "$CODEX_PID_FILE"
+  rm -f "$APP_PID_FILE"
 
   local host port
   host="$(get_effective_value SERVER_HOST)"
@@ -187,17 +218,17 @@ start_codexclaw() {
   fi
 
   echo "[INFO] 后台启动 codeClaw..."
-  setsid nohup "${cmd[@]}" >>"$CODEX_LOG_FILE" 2>&1 < /dev/null &
+  setsid nohup "${cmd[@]}" >>"$APP_LOG_FILE" 2>&1 < /dev/null &
   local pid=$!
-  echo "$pid" > "$CODEX_PID_FILE"
+  echo "$pid" > "$APP_PID_FILE"
   sleep 1
   if kill -0 "$pid" 2>/dev/null; then
     echo "[INFO] codeClaw 启动成功，PID=$pid"
-    echo "[INFO] 日志文件: $CODEX_LOG_FILE"
+    echo "[INFO] 日志文件: $APP_LOG_FILE"
   else
-    echo "[ERROR] codeClaw 启动失败，请检查日志: $CODEX_LOG_FILE"
-    tail -n 50 "$CODEX_LOG_FILE" 2>/dev/null || true
-    rm -f "$CODEX_PID_FILE"
+    echo "[ERROR] codeClaw 启动失败，请检查日志: $APP_LOG_FILE"
+    tail -n 50 "$APP_LOG_FILE" 2>/dev/null || true
+    rm -f "$APP_PID_FILE"
     exit 1
   fi
 }
@@ -271,14 +302,14 @@ main() {
       if [[ "${1:-}" == "-f" || "${1:-}" == "--foreground" ]]; then
         foreground=1
       fi
-      start_codexclaw "$foreground"
+      start_app "$foreground"
       if [[ "$foreground" != "1" ]]; then
         start_wechat_sidecar 0 || true
       fi
       ;;
     stop)
       stop_pid "WeChat sidecar" "$WECHAT_PID_FILE"
-      stop_pid "codeClaw" "$CODEX_PID_FILE"
+      stop_pid "codeClaw" "$APP_PID_FILE"
       ;;
     restart)
       shift || true
@@ -287,14 +318,14 @@ main() {
         foreground=1
       fi
       stop_pid "WeChat sidecar" "$WECHAT_PID_FILE"
-      stop_pid "codeClaw" "$CODEX_PID_FILE"
-      start_codexclaw "$foreground"
+      stop_pid "codeClaw" "$APP_PID_FILE"
+      start_app "$foreground"
       if [[ "$foreground" != "1" ]]; then
         start_wechat_sidecar 0 || true
       fi
       ;;
     status)
-      status_one "codeClaw" "$CODEX_PID_FILE" "$CODEX_LOG_FILE"
+      status_one "codeClaw" "$APP_PID_FILE" "$APP_LOG_FILE"
       status_one "WeChat sidecar" "$WECHAT_PID_FILE" "$WECHAT_LOG_FILE"
       ;;
     wx)
@@ -330,4 +361,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

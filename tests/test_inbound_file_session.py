@@ -1,9 +1,7 @@
 """Inbound files must reach the session, not just the archive directory.
 
-Both channels used to return early after archiving, so `append_round` never ran
-and the agent had no idea a file had arrived. These tests pin the replacement
-behaviour: queue a notice on arrival, inject it into the next user turn, and
-never wake the backend on the arrival turn itself.
+Queue a notice on arrival, inject it into the next user turn, and never wake
+pi on the arrival turn itself. Native pi sessions own conversation history.
 """
 
 import os
@@ -11,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.commands import process_command
 from channel.feishu.client import FeishuClientError
 from channel.feishu.handler import FeishuWebhookHandler
 from channel.wechat.handler import WeChatWebhookHandler
@@ -103,7 +102,10 @@ def test_new_session_starts_without_notices() -> None:
     sessions = SessionManager()
     sessions.note_incoming_file("k", "- a")
 
-    sessions.new_session("k")
+    agent = RecordingWeChatAgent()
+    result = process_command("/new", sessions, "k", agent_client=agent)
+    assert result is not None and result.handled
+    assert agent.reset_keys == ["k"]
 
     assert sessions.take_pending_files("k") == []
 
@@ -113,26 +115,36 @@ def test_new_session_starts_without_notices() -> None:
 # --------------------------------------------------------------------------- #
 
 
-class RecordingWeChatCodex:
+class RecordingWeChatAgent:
     def __init__(self) -> None:
         self.messages: list[dict[str, str]] = []
         self.calls = 0
+        self.session_keys: list[str | None] = []
+        self.reset_keys: list[str] = []
 
     async def chat_stream(self, messages, trace_id: str, *, session_key: str | None = None):
         self.calls += 1
         self.messages = messages
+        self.session_keys.append(session_key)
         yield "收到"
 
     async def chat(self, messages, trace_id: str, *, session_key: str | None = None) -> str:
         self.calls += 1
         self.messages = messages
+        self.session_keys.append(session_key)
         return "收到"
 
     def cancel(self, trace_id: str) -> bool:
         return True
 
+    def reset_session(self, session_key: str) -> None:
+        self.reset_keys.append(session_key)
 
-class ForbiddenWeChatCodex(RecordingWeChatCodex):
+    async def close(self) -> None:
+        pass
+
+
+class ForbiddenWeChatAgent(RecordingWeChatAgent):
     async def chat_stream(self, messages, trace_id: str, *, session_key: str | None = None):
         self.calls += 1
         raise AssertionError("a file-only message must not wake the backend")
@@ -144,15 +156,15 @@ class ForbiddenWeChatCodex(RecordingWeChatCodex):
         raise AssertionError("a file-only message must not wake the backend")
 
 
-def make_wechat_handler(codex) -> tuple[WeChatWebhookHandler, SessionManager]:
-    sessions = SessionManager(max_history_rounds=10)
+def make_wechat_handler(agent) -> tuple[WeChatWebhookHandler, SessionManager]:
+    sessions = SessionManager()
     handler = WeChatWebhookHandler(
         settings=SimpleNamespace(
             streaming_enabled=True,
             wechat_webhook_token="",
             wechat_message_chunk_chars=1800,
         ),
-        codex_client=codex,
+        agent_client=agent,
         session_manager=sessions,
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
@@ -180,28 +192,28 @@ ARCHIVED = [{"name": "report.pdf", "path": "/data/file/report.pdf", "size": 4096
 
 
 async def test_wechat_file_only_message_skips_backend_and_queues_notice() -> None:
-    codex = ForbiddenWeChatCodex()
-    handler, sessions = make_wechat_handler(codex)
+    agent = ForbiddenWeChatAgent()
+    handler, sessions = make_wechat_handler(agent)
 
     result = await handler.handle_webhook(headers={}, raw_body=wechat_body("m1", files=ARCHIVED))
 
     assert result["code"] == 0
     assert result["replies"] == []
-    assert codex.calls == 0
+    assert agent.calls == 0
     assert sessions.take_pending_files(WECHAT_SESSION_KEY) == [
         "- report.pdf → /data/file/report.pdf (4096 bytes)"
     ]
 
 
 async def test_wechat_notice_reaches_the_backend_on_the_next_turn() -> None:
-    codex = RecordingWeChatCodex()
-    handler, sessions = make_wechat_handler(codex)
+    agent = RecordingWeChatAgent()
+    handler, sessions = make_wechat_handler(agent)
 
     await handler.handle_webhook(headers={}, raw_body=wechat_body("m1", files=ARCHIVED))
     await handler.handle_webhook(headers={}, raw_body=wechat_body("m2", text="这个文件讲了什么"))
 
-    assert codex.calls == 1
-    prompt = codex.messages[-1]["content"]
+    assert agent.calls == 1
+    prompt = agent.messages[-1]["content"]
     assert FILE_NOTICE_HEADER in prompt
     assert "/data/file/report.pdf" in prompt
     assert prompt.endswith("这个文件讲了什么")
@@ -209,34 +221,34 @@ async def test_wechat_notice_reaches_the_backend_on_the_next_turn() -> None:
 
 
 async def test_wechat_text_and_files_in_one_message_share_a_turn() -> None:
-    codex = RecordingWeChatCodex()
-    handler, _ = make_wechat_handler(codex)
+    agent = RecordingWeChatAgent()
+    handler, _ = make_wechat_handler(agent)
 
     await handler.handle_webhook(
         headers={}, raw_body=wechat_body("m1", text="帮我看下这个", files=ARCHIVED)
     )
 
-    assert codex.calls == 1
-    prompt = codex.messages[-1]["content"]
+    assert agent.calls == 1
+    prompt = agent.messages[-1]["content"]
     assert "/data/file/report.pdf" in prompt
     assert prompt.endswith("帮我看下这个")
 
 
 async def test_wechat_command_turn_does_not_consume_the_notice() -> None:
-    codex = RecordingWeChatCodex()
-    handler, sessions = make_wechat_handler(codex)
+    agent = RecordingWeChatAgent()
+    handler, sessions = make_wechat_handler(agent)
 
     await handler.handle_webhook(headers={}, raw_body=wechat_body("m1", files=ARCHIVED))
     await handler.handle_webhook(headers={}, raw_body=wechat_body("m2", text="/help"))
 
-    assert codex.calls == 0
+    assert agent.calls == 0
     # /help short-circuits before the LLM turn, so the notice must survive it.
     assert len(sessions.take_pending_files(WECHAT_SESSION_KEY)) == 1
 
 
 async def test_wechat_duplicate_file_message_is_ignored() -> None:
-    codex = ForbiddenWeChatCodex()
-    handler, sessions = make_wechat_handler(codex)
+    agent = ForbiddenWeChatAgent()
+    handler, sessions = make_wechat_handler(agent)
 
     await handler.handle_webhook(headers={}, raw_body=wechat_body("dup", files=ARCHIVED))
     await handler.handle_webhook(headers={}, raw_body=wechat_body("dup", files=ARCHIVED))
@@ -245,7 +257,7 @@ async def test_wechat_duplicate_file_message_is_ignored() -> None:
 
 
 async def test_wechat_rejects_message_with_neither_text_nor_files() -> None:
-    handler, _ = make_wechat_handler(ForbiddenWeChatCodex())
+    handler, _ = make_wechat_handler(ForbiddenWeChatAgent())
 
     with pytest.raises(Exception) as excinfo:
         await handler.handle_webhook(headers={}, raw_body=wechat_body("m1"))
@@ -254,7 +266,7 @@ async def test_wechat_rejects_message_with_neither_text_nor_files() -> None:
 
 
 async def test_wechat_skips_malformed_file_entries() -> None:
-    handler, sessions = make_wechat_handler(ForbiddenWeChatCodex())
+    handler, sessions = make_wechat_handler(ForbiddenWeChatAgent())
 
     await handler.handle_webhook(
         headers={},
@@ -273,7 +285,7 @@ async def test_wechat_skips_malformed_file_entries() -> None:
 
 
 async def test_wechat_files_without_text_are_not_treated_as_a_command() -> None:
-    handler, sessions = make_wechat_handler(ForbiddenWeChatCodex())
+    handler, sessions = make_wechat_handler(ForbiddenWeChatAgent())
 
     await handler.handle_webhook(headers={}, raw_body=wechat_body("m1", files=ARCHIVED))
 
@@ -301,8 +313,8 @@ class FileCapableFeishuClient(FakeFeishuClient):
         return self.file_bytes, "application/pdf"
 
 
-def make_feishu_handler(tmp_path, feishu_client, codex) -> tuple[FeishuWebhookHandler, SessionManager]:
-    sessions = SessionManager(max_history_rounds=10)
+def make_feishu_handler(tmp_path, feishu_client, agent) -> tuple[FeishuWebhookHandler, SessionManager]:
+    sessions = SessionManager()
     handler = FeishuWebhookHandler(
         settings=SimpleNamespace(
             streaming_enabled=True,
@@ -311,7 +323,7 @@ def make_feishu_handler(tmp_path, feishu_client, codex) -> tuple[FeishuWebhookHa
             file_archive_dir=str(tmp_path / "archive"),
         ),
         feishu_client=feishu_client,
-        codex_client=codex,
+        agent_client=agent,
         session_manager=sessions,
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
@@ -340,15 +352,15 @@ FEISHU_SESSION_KEY = "ou_1:oc_1"
 
 async def test_feishu_file_event_archives_replies_and_queues_notice(tmp_path) -> None:
     feishu_client = FileCapableFeishuClient()
-    codex = ForbiddenWeChatCodex()
-    handler, sessions = make_feishu_handler(tmp_path, feishu_client, codex)
+    agent = ForbiddenWeChatAgent()
+    handler, sessions = make_feishu_handler(tmp_path, feishu_client, agent)
 
     await handler._handle_text_event(event=feishu_file_event(), trace_id="t1")
 
     saved = tmp_path / "archive" / "report.pdf"
     assert saved.read_bytes() == feishu_client.file_bytes
     assert feishu_client.reply_calls == [(f"已收藏\n{os.path.realpath(saved)}", "om_f1-file")]
-    assert codex.calls == 0
+    assert agent.calls == 0
     assert sessions.take_pending_files(FEISHU_SESSION_KEY) == [
         f"- report.pdf → {os.path.realpath(saved)} ({len(feishu_client.file_bytes)} bytes)"
     ]
@@ -356,14 +368,14 @@ async def test_feishu_file_event_archives_replies_and_queues_notice(tmp_path) ->
 
 async def test_feishu_notice_reaches_the_backend_on_the_next_turn(tmp_path) -> None:
     feishu_client = FileCapableFeishuClient()
-    codex = RecordingWeChatCodex()
-    handler, sessions = make_feishu_handler(tmp_path, feishu_client, codex)
+    agent = RecordingWeChatAgent()
+    handler, sessions = make_feishu_handler(tmp_path, feishu_client, agent)
 
     await handler._handle_text_event(event=feishu_file_event(), trace_id="t1")
     await handler._handle_text_event(event=feishu_text_event("这个文件讲了什么"), trace_id="t2")
 
-    assert codex.calls == 1
-    prompt = codex.messages[-1]["content"]
+    assert agent.calls == 1
+    prompt = agent.messages[-1]["content"]
     assert FILE_NOTICE_HEADER in prompt
     assert str(tmp_path / "archive" / "report.pdf") in prompt
     assert prompt.endswith("这个文件讲了什么")
@@ -373,10 +385,123 @@ async def test_feishu_notice_reaches_the_backend_on_the_next_turn(tmp_path) -> N
 async def test_feishu_download_failure_queues_nothing(tmp_path) -> None:
     feishu_client = FileCapableFeishuClient()
     feishu_client.fail_download = True
-    handler, sessions = make_feishu_handler(tmp_path, feishu_client, ForbiddenWeChatCodex())
+    handler, sessions = make_feishu_handler(tmp_path, feishu_client, ForbiddenWeChatAgent())
 
     await handler._handle_text_event(event=feishu_file_event(), trace_id="t1")
 
     assert feishu_client.reply_calls == [("文件收藏失败，请稍后重试。", "om_f1-file-failed")]
     # A file that never landed must not be advertised to the agent.
     assert sessions.take_pending_files(FEISHU_SESSION_KEY) == []
+
+
+@pytest.fixture(params=["feishu", "wechat"])
+def channel_turn(request, tmp_path):
+    agent = RecordingWeChatAgent()
+    if request.param == "feishu":
+        transport = FileCapableFeishuClient()
+        handler, sessions = make_feishu_handler(tmp_path, transport, agent)
+        key = FEISHU_SESSION_KEY
+
+        async def send(text, message_id):
+            offset = len(transport.reply_calls)
+            await handler._handle_text_event(feishu_text_event(text, message_id), f"t-{message_id}")
+            return [text for text, _ in transport.reply_calls[offset:]]
+    else:
+        handler, sessions = make_wechat_handler(agent)
+        key = WECHAT_SESSION_KEY
+
+        async def send(text, message_id):
+            result = await handler.handle_webhook(headers={}, raw_body=wechat_body(message_id, text=text))
+            return result["replies"]
+
+    return handler, sessions, agent, key, send
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_channels_send_only_current_turn_and_inject_notices_once(channel_turn, streaming):
+    handler, sessions, agent, key, send = channel_turn
+    handler._settings.streaming_enabled = streaming
+    sessions.note_incoming_file(key, "- attachment.pdf")
+
+    assert await send("第一轮问题", "m1") == ["收到"]
+    assert agent.messages == [{
+        "role": "user", "content": apply_pending_notices("第一轮问题", ["- attachment.pdf"])
+    }]
+    assert await send("第二轮问题", "m2") == ["收到"]
+    assert agent.messages == [{"role": "user", "content": "第二轮问题"}]
+    assert agent.session_keys == [key, key]
+    assert sessions.take_pending_files(key) == []
+
+
+async def test_registry_rejection_preserves_notices_for_next_accepted_turn(channel_turn):
+    handler, sessions, agent, key, send = channel_turn
+    sessions.note_incoming_file(key, "- attachment.pdf")
+    assert handler._task_registry.start(key=key, trace_id="busy", message_id="busy", cancel_callback=lambda: True)
+
+    replies = await send("被拒绝的消息", "m1")
+    assert "已有任务在运行" in replies[0]
+    assert agent.calls == 0
+    handler._task_registry.finish(key=key, trace_id="busy")
+    assert await send("下一轮", "m2") == ["收到"]
+    assert agent.messages == [{"role": "user", "content": apply_pending_notices("下一轮", ["- attachment.pdf"])}]
+    assert agent.session_keys == [key]
+    assert sessions.take_pending_files(key) == []
+
+
+async def test_queue_rejection_preserves_notices_for_next_accepted_turn(channel_turn):
+    from core.session.message_queue import SessionMessageQueue
+
+    handler, sessions, agent, key, send = channel_turn
+    sessions.note_incoming_file(key, "- attachment.pdf")
+    handler._message_queue = SessionMessageQueue(max_pending=0)
+
+    replies = await send("被拒绝的消息", "m1")
+    assert "排队消息已满" in replies[0]
+    assert agent.calls == 0
+    handler._message_queue = SessionMessageQueue(max_pending=3)
+    assert await send("下一轮", "m2") == ["收到"]
+    assert agent.messages == [{"role": "user", "content": apply_pending_notices("下一轮", ["- attachment.pdf"])}]
+    assert agent.session_keys == [key]
+    assert sessions.take_pending_files(key) == []
+
+
+@pytest.mark.parametrize("command", ["/codex", "/claude", "/qodercli", "/opencode"])
+@pytest.mark.parametrize("suffix", ["", " 请执行任务"])
+async def test_removed_commands_never_reach_model_or_consume_files(channel_turn, command, suffix):
+    _, sessions, agent, key, send = channel_turn
+    sessions.note_incoming_file(key, "- attachment.pdf")
+
+    replies = await send(command + suffix, "m1")
+    assert "已移除" in replies[0]
+    assert "唯一后端为 pi" in replies[0]
+    assert agent.calls == 0
+    assert agent.reset_keys == []
+    assert sessions.take_pending_files(key) == ["- attachment.pdf"]
+
+
+@pytest.mark.parametrize("command", ["/help", "/backend", "/pi", "/compact", "/compress", "/daily list", "/remind 1m 喝水"])
+async def test_local_commands_do_not_wake_model_or_drain_files(channel_turn, command):
+    _, sessions, agent, key, send = channel_turn
+    sessions.note_incoming_file(key, "- attachment.pdf")
+
+    assert await send(command, "m1")
+    assert agent.calls == 0
+    assert agent.reset_keys == []
+    assert sessions.take_pending_files(key) == ["- attachment.pdf"]
+
+
+async def test_skills_command_uses_shared_catalog_without_waking_model(channel_turn, tmp_path, monkeypatch):
+    from app import skills
+
+    _, sessions, agent, key, send = channel_turn
+    skill_dir = tmp_path / "skills" / "unit-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: unit-skill\ndescription: isolated catalog entry\n---\n", encoding="utf-8")
+    monkeypatch.setattr(skills, "SKILL_ROOTS", (str(tmp_path / "skills"),))
+    sessions.note_incoming_file(key, "- attachment.pdf")
+
+    replies = await send("/skills", "m1")
+    assert "unit-skill" in "".join(replies)
+    assert "isolated catalog entry" in "".join(replies)
+    assert agent.calls == 0
+    assert sessions.take_pending_files(key) == ["- attachment.pdf"]

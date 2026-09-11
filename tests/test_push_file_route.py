@@ -335,3 +335,41 @@ async def test_push_file_accepts_file_alias_key(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 200
     assert fake_push.recorded["path"] == str(target)
+
+
+def test_main_shares_one_pi_client_across_channels() -> None:
+    from core.agent.pi_cli import PiCliClient
+
+    assert isinstance(main.agent_client, PiCliClient)
+    assert main.feishu_handler._agent_client is main.agent_client
+    assert main.wechat_handler._agent_client is main.agent_client
+
+
+async def test_daily_prompt_uses_pi_with_its_native_session_key(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    agent = SimpleNamespace(chat=AsyncMock(return_value="daily result"))
+    monkeypatch.setattr(main, "agent_client", agent)
+
+    assert await main.run_daily_prompt("daily prompt", "daily:task-id", "daily-trace") == "daily result"
+    agent.chat.assert_awaited_once_with(
+        messages=[{"role": "user", "content": "daily prompt"}],
+        trace_id="daily-trace",
+        session_key="daily:task-id",
+    )
+
+
+async def test_shutdown_closes_pi_and_schedulers_without_live_services(monkeypatch) -> None:
+    from unittest.mock import AsyncMock, Mock
+
+    commit = Mock()
+    monkeypatch.setattr(main.memory, "auto_commit", commit)
+    clients = [SimpleNamespace(close=AsyncMock()) for _ in range(4)]
+    for name, client in zip(("daily_scheduler", "reminder_scheduler", "feishu_client", "agent_client"), clients):
+        monkeypatch.setattr(main, name, client)
+
+    await main.shutdown_event()
+
+    commit.assert_called_once_with(main.settings)
+    for client in clients:
+        client.close.assert_awaited_once_with()

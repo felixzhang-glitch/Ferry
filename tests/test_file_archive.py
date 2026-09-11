@@ -128,8 +128,8 @@ def _make_handler(tmp_path, feishu_client: FakeFileFeishuClient) -> FeishuWebhoo
         settings=settings,
         feishu_client=feishu_client,
         # File flow must never reach the backend; None makes any call blow up.
-        codex_client=None,
-        session_manager=SessionManager(max_history_rounds=10),
+        agent_client=None,
+        session_manager=SessionManager(),
         deduplicator=MessageDeduplicator(ttl_seconds=3600),
         task_registry=ActiveTaskRegistry(),
     )

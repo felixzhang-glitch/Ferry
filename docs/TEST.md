@@ -2,44 +2,49 @@
 
 ## 测试策略
 
-- 测试层级：单元 / 链路级测试为主（`tests/` 下 pytest），外部调用（CLI 子进程、飞书 / 微信 API）一律 mock；真实链路走手动冒烟
-- 运行方式：`cd conf && pytest -q`（配置在 `conf/pytest.ini`，pythonpath 指向 `lib/python`）；当前 201 用例
-- 覆盖率要求：不设硬性指标，核心功能必须有用例兜底（见下表与 `docs/functional-tests.md`）
+- pytest 单元 / 链路测试为主，pi JSONL 与飞书 / 微信 API 使用 mock；进程取消另用本地 Python 子进程验证；真实链路单独手动冒烟
+- 运行：项目根执行 `pytest -c conf/pytest.ini -q`，或 `cd conf && pytest -q`
+- Node sidecar：项目根执行 `node --test tests/wechat-sidecar.test.mjs`
+- 以下是回归目标和文件映射；本次执行记录见 [需求变更记录](requirement-changes.md)。真实模型和渠道实发需单独冒烟，不能由 mock 测试替代
 
 ## 测试要点
 
-1. 多渠道消息解析与签名校验必须拒绝非法输入（伪造签名、错误 token）
-2. 会话隔离：不同 `user_id:chat_id` 不串会话；同 `message_id` 不重复处理；连发消息按 FIFO 排队
-3. CLI 后端封装的输入输出契约稳定（pi 的 json 流、codex 的流式、claude/qodercli 的回复解析）
-4. 定时任务与提醒重启后必须恢复
-5. 格式化分段不破坏代码块 / 段落边界，卡片渲染失败能降级纯文本
-6. 密钥扫描钩子：命中即阻断、白名单放行、异常退出 fail-closed
+1. 两渠道拒绝伪造签名或错误 token，保留消息解析、格式化、文件与图片能力
+2. 会话隔离、message_id 去重、同会话 FIFO 排队；两渠道每轮只传当前 user 消息，不存 assistant 历史
+3. pi JSONL 契约：只取正文 delta，过滤 user / thinking / toolcall，依据最后一条 assistant `message_end` 判断成败
+4. `/new`、`/reset` 清附件与 pi 映射；`/backend`、`/pi` 和旧命令、压缩说明命令不改变会话状态
+5. 新配置优先于旧回退；`PI_WORK_DIR` 是最终 cwd，默认与旧配置解析结果保持历史路径，不能多一层或少一层 `/pi`
+6. 定时、记忆、队列、图片发现与推送功能不因后端模块删除而丢失
+7. 取消、重试、熔断与超时分别验证；持续输出时的总超时不能以 idle 超时用例代替
 
 ## 要点与用例映射
 
 | 测试要点 | 用例路径 | 类型 |
 |---|---|---|
-| 飞书 WS 全链路（收消息 → Typing → 单条回复） | `tests/test_feishu_ws.py`、`tests/test_handler_single_reply.py` | 链路 |
+| 飞书 WS 与单条回复 | `tests/test_feishu_ws.py`、`tests/test_handler_single_reply.py` | 链路 |
 | 飞书格式化与分段 | `tests/test_feishu_formatting.py` | 单元 |
-| 飞书图片下载 | `tests/test_feishu_media.py` | 单元 |
-| 飞书文件归档 | `tests/test_file_archive.py` | 单元 |
+| 飞书图片与文件归档 | `tests/test_feishu_media.py`、`tests/test_file_archive.py` | 单元 |
 | 飞书 reaction / 回执 | `tests/test_feishu_reaction.py` | 单元 |
-| 微信消息处理 | `tests/test_wechat_handler.py` | 单元 |
-| 微信 webhook token 校验 | `tests/test_signature_validation.py` | 单元 |
+| 微信消息与鉴权 | `tests/test_wechat_handler.py`、`tests/test_signature_validation.py` | 单元 |
 | 消息解析 | `tests/test_message_parsing.py` | 单元 |
-| 会话管理与去重 | `tests/test_session_manager.py` | 单元 |
-| FIFO 消息队列 | `tests/test_message_queue.py` | 单元 |
-| `/new` `/reset` `/stop` 命令 | `tests/test_new_command.py` | 单元 |
-| 每日任务调度与恢复 | `tests/test_daily_scheduler.py` | 单元 |
-| 定时提醒调度与恢复 | `tests/test_reminder_scheduler.py` | 单元 |
-| 长期记忆读写与注入 | `tests/test_memory.py` | 单元 |
-| pi 会话与调用链 | `tests/test_pi_session.py`、`tests/test_pi_chain.py` | 单元 |
-| opencode 会话续接与调用链 | `tests/test_opencode_session.py`、`tests/test_opencode_chain.py` | 单元 |
-| codex 流式输出 | `tests/test_codex_streaming_mock.py` | 单元 |
-| claude / qodercli 客户端 | `tests/test_claude_cli.py` | 单元 |
+| key、附件与去重 | `tests/test_session_manager.py`、`tests/test_inbound_file_session.py` | 单元 |
+| FIFO 与取消 | `tests/test_message_queue.py`、`tests/test_new_command.py` | 单元 |
+| 会话 / 状态 / 旧命令兼容 | `tests/test_new_command.py`、`tests/test_wechat_handler.py` | 单元 |
+| 每日任务与提醒恢复 | `tests/test_daily_scheduler.py`、`tests/test_reminder_scheduler.py` | 单元 |
+| 长期记忆注入 | `tests/test_memory.py` | 单元 |
+| pi 调用、原生会话与错误语义 | `tests/test_pi_session.py`、`tests/test_pi_chain.py` | 单元 |
+| 时间注入 | `tests/test_clock.py`、`tests/test_pi_session.py` | 单元 |
+| skills 发现与摘要 | `tests/test_skills.py` | 单元 |
+| 配置迁移与最终 cwd | `tests/test_config.py` | 单元 |
+| 仅依赖 pi 的启动检查 | `tests/test_server_startup.py` | 脚本 |
+| 出站文件与鉴权 | `tests/test_feishu_file_send.py`、`tests/test_push_file_route.py`、`tests/wechat-sidecar.test.mjs` | 单元 / 路由 |
 | pre-push 密钥扫描 | `tests/test_secret_scan.py` | 单元 |
 
-## 手工验证清单
+其它 CLI 的专属测试已移除，共用行为迁移到 pi / `AgentClient` 测试替身。技能发现覆盖 `app.skills`，配置迁移覆盖新键、旧键、跨输入源冲突优先级与默认值；项目不再导入旧客户端模块
 
-- 后端切换（`/pi` `/opencode` `/codex` `/claude` `/qodercli`）、rules 热加载、记忆写入回执等无法自动化的场景，见 `docs/functional-tests.md` 中标"手动冒烟"的条目
-- 每次迭代合入前对照 `docs/functional-tests.md` 全量过一遍
+## 手工验证与安全边界
+
+- 完整清单见 [functional-tests.md](functional-tests.md)
+- 需要重启、真实模型调用、改规则或发送渠道消息的场景，在隔离环境执行，不对用户现有服务自动操作
+- 使用临时 cwd、session store、agent dir 和调度数据；验证生产路径兼容时只检查解析结果，不移动或删除生产数据
+- 未完成项保留待验状态，不把历史测试数量或历史分析报告当成本次证据

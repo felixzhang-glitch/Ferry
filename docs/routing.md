@@ -1,123 +1,38 @@
-# 后端路由策略
+# pi 单后端接入
 
-## 总览
+> 保留 `routing.md` 文件名以兼容既有链接；多后端路由与运行时切换已移除
 
-AgentRouter 持有所有后端客户端实例，对外暴露统一接口（`chat` / `chat_stream` / `cancel` / `close`），作为 drop-in 注入 handler。
+## 装配与接口
 
-默认后端：**pi**。
+`app.main` 直接实例化 `PiCliClient`，注入飞书、微信 handler 和每日任务调度器，不再经过 router，也没有 `active_backend` 状态
 
-## 切换命令
+- `core.agent.pi_cli`：pi JSONL 调用、原生会话 ID 映射与进程生命周期
+- `core.agent.types`：轻量 `AgentClient` Protocol，以及 `AgentClientError` / `AgentClientCancelled`；渠道与测试替身只依赖该接口
+- 接口：`chat` / `chat_stream` / `cancel` / `reset_session` / `close`
+- `app.skills`：skills 发现与摘要；不再借用其它 CLI 客户端
 
-| 命令 | 切换目标 |
-|------|---------|
-| `/pi` | Pi Agent（默认） |
-| `/opencode` | OpenCode CLI |
-| `/codex` | Codex CLI |
-| `/claude` | Claude Code |
-| `/qodercli` | Qoder CLI |
-| `/backend` | 查看当前后端 + 可选列表 |
+两个渠道每轮只传当前 `user` 消息（含需要搭载的附件通知），不拼接历史。pi 使用 `--mode json --session-id <id>`，负责历史持久化与原生压缩，详见 [pi CLI 参考](references/pi-cli.txt) 与 [会话管理](sessions.md)
 
-## 切换行为
+## 命令兼容
 
-1. 更新 AgentRouter 活跃后端指针
-2. 原子写 `runtime/server/backend.json` 持久化
-3. 清空当前会话历史（避免跨后端上下文污染）
-4. pi / opencode session 不销毁（下次切回可续接）
+| 命令 | 行为 |
+|------|------|
+| `/backend`、`/pi` | 只读显示唯一 pi 状态，不切换、不清会话、不写后端状态文件 |
+| `/opencode`、`/codex`、`/claude`、`/qodercli` | 提示该后端已移除，不调用 CLI、不改变会话 |
+| `/compact`、`/compress` | 提示上下文由 pi 原生管理，不执行桥接层压缩、不宣称压缩成功 |
+| `/new`、`/reset` | 清待处理附件与当前 pi session 映射，下轮创建新会话；旧 pi transcript 保留 |
 
-## 隔离策略
+## 配置与迁移边界
 
-| 后端 | 工作目录 |
-|------|---------|
-| pi | `CODEX_WORK_DIR/pi/` |
-| opencode | `CODEX_WORK_DIR/opencode/` |
-| codex | `CODEX_WORK_DIR`（根） |
-| claude | `CODEX_WORK_DIR/claude/` |
-| qodercli | `CODEX_WORK_DIR/qodercli/` |
+后端配置统一使用 `PI_*`，渠道、文件、记忆、队列等共享配置继续保留，模型服务凭证（如 `DASHSCOPE_API_KEY`）仍按 pi provider 配置使用
 
-## 各后端调用方式
+- `PI_WORK_DIR` 是 pi 子进程的**最终 cwd**，不会再追加 `/pi`
+- 未设置新键时，兼容旧 `CODEX_WORK_DIR`，按旧语义取 `<CODEX_WORK_DIR>/pi`；两者均未设置时仍为 `./runtime/codex-workdir/pi`
+- 例如原 `CODEX_WORK_DIR=/data/work` 对应新 `PI_WORK_DIR=/data/work/pi`，不能直接照抄 `/data/work`
+- 重试、退避、熔断、流读取上限等旧 `CODEX_*` 共享键只作对应 `PI_*` 新键的迁移回退，新键优先；不恢复 Codex 后端
+- `GENERATED_IMAGES_DIR` 替代 `CODEX_GENERATED_IMAGES_DIR`，旧键仅作回退；目录仍供既有图片发现链路使用，不依赖 Codex CLI
+- `ACTIVE_BACKEND`、`BACKEND_STATE_PATH` 与 `runtime/server/backend.json` 不再参与启动或后端选择；其它后端专属配置不再生效
 
-### pi（主力）
+**不能自动迁移或删除运行数据**：保持 pi 现有 cwd、`PI_SESSION_STORE_PATH`（默认 `./runtime/server/pi-sessions.json`）、`PI_CODING_AGENT_DIR`（未设置时 `~/.pi/agent`）及其 session 文件位置不变。pi 会话按 cwd 组织，改 cwd 可能使旧 ID 无法续接；只保留映射文件还不够。旧后端目录、状态文件、用户文件与记忆均不在代码清理范围
 
-```bash
-pi --mode json --session-id <session_id> [--model <provider/model>] \
-   --append-system-prompt <rules/AGENTS.md> \
-   --append-system-prompt <rules/admin.md> \
-   --append-system-prompt <memory-context.md> \
-   --approve <prompt>
-```
-
-- 输出：JSONL 事件流，只取 `message_update.assistantMessageEvent.text_delta`（原生增量，无需 diff）
-- 会话管理：session ID **由 codeClaw 生成**并通过 `--session-id` 复用，pi 负责上下文与压缩
-- 注意：`--mode json` 退出码恒为 0，成败靠 `message_end.message.stopReason` 判定
-- 详见 [references/pi-cli.txt](references/pi-cli.txt)
-
-### opencode
-
-```bash
-opencode run --session <session_id> [--model <model>] [--agent <agent>] <prompt>
-```
-
-- 输出：逐行 stdout 流式读取
-- 会话管理：opencode 原生，codeClaw 只维护 session ID 映射
-
-### codex
-
-```bash
-codex exec --skip-git-repo-check --json -C <work_dir> [perms] <prompt>
-```
-
-- 输出：JSON event stream（逐行 NDJSON）
-- 稳定性：超时 / 重试 / 熔断
-
-### claude / qodercli
-
-```bash
-<bin> -p --output-format stream-json --add-dir <work_dir> [--model X] [perms] <prompt>
-```
-
-- 输出：stream-json 格式
-- 差异：qodercli 不支持 `--verbose` / `--include-partial-messages`
-
-## 文件
-
-```
-lib/python/core/agent/
-  router.py        → AgentRouter 路由器
-  pi_cli.py        → Pi Agent 客户端（默认后端）
-  opencode_cli.py  → OpenCode 客户端
-  claude_cli.py    → Claude/Qoder CLI 客户端
-  types.py         → BackendClient Protocol
-```
-
-## 设计决策
-
-### 为什么用 Protocol 抽象
-
-`BackendClient` 是一个 Python Protocol（鸭子类型），不强制继承。各后端客户端只需实现 `chat` / `chat_stream` / `cancel` / `close` 四个方法即可注入 AgentRouter。
-
-决策理由：
-- 后端 CLI 调用方式差异大（codex 用 `exec --json`、claude 用 `-p --output-format stream-json`、opencode 用 `run --session`、pi 用 `--mode json --session-id`），不适合强继承
-- 新增后端只需实现 Protocol，不改路由器代码
-- handler 层通过类型标注依赖 Protocol 而非具体类
-
-### 为什么切换时清空会话
-
-后端切换成功后会清空当前会话历史。原因：
-- 不同后端的工具能力、skills、回答风格差异大，混用上下文会导致幻觉
-- pi / opencode 的 session 是独立于 codeClaw 会话管理的，切过去不需要旧历史
-- 切走时对方的 session 保留（下次切回可续接），但 codeClaw 侧的历史清空
-
-### pi / opencode 会话管理 vs 其他后端
-
-| 维度 | pi | opencode | codex / claude / qodercli |
-|------|----|----------|---------------------------|
-| 会话持久化 | pi 原生 `--session-id` | opencode 原生 `--session` | codeClaw FIFO 历史拼接 |
-| 上下文压缩 | pi 内部自管 | opencode 内部自管 | codeClaw `/compact` 手动触发 |
-| session 映射 | `user_id:chat_id` -> codeClaw 生成的 uuid，持久化在 `pi-sessions.json` | `user_id:chat_id` -> opencode 反解的 session_id，持久化在 `opencode-sessions.json` | 无独立 session 概念 |
-| `/new` 行为 | 删除映射，下轮生成新 uuid | 生成新 opencode session_id | 清空历史数组 |
-
-### 状态持久化方案
-
-后端选择状态写入 `runtime/server/backend.json`，使用原子写（先写 `.tmp` 再 `os.replace`）防止断电损坏。启动时加载；文件不存在则 fallback 到 `ACTIVE_BACKEND` 环境变量。
-
-选择文件而非内存的原因：重启后保留用户上次选择的后端，避免每次重启都回到默认。
+启动仅需 pi CLI，不检查其它 agent CLI。迁移验证使用隔离配置；本次不修改真实配置、不移动数据、不重启上线。超时与取消的语义见 [可靠性说明](RELIABILITY.md)

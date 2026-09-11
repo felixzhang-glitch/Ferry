@@ -5,13 +5,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-export PATH="/root/.opencode/bin:/root/.nvm/versions/node/v20.19.4/bin:/root/.pyenv/versions/3.10.13/bin:$PATH"
+export PATH="/root/.local/bin:/root/.nvm/versions/node/v20.19.4/bin:/root/.pyenv/versions/3.10.13/bin:$PATH"
 
-set -a
+# Reuse dotenv parsing without invoking service control or changing Python.
 # shellcheck disable=SC1091
-source "$ROOT_DIR/conf/.env"
-set +a
-export PYTHONPATH="$ROOT_DIR/lib/python${PYTHONPATH:+:$PYTHONPATH}"
+source "$ROOT_DIR/bin/server"
+load_env
 
 exec /root/.pyenv/versions/3.10.13/bin/python -m uvicorn app.main:app \
   --host "${SERVER_HOST:-0.0.0.0}" --port "${SERVER_PORT:-8080}"

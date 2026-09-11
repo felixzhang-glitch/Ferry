@@ -6,8 +6,8 @@ codeClaw 的"记忆"分三层，职责与可写方严格分离：
 
 | 载体 | 内容 | 谁可写 | 注入方式 |
 |------|------|--------|----------|
-| `rules/AGENTS.md` | 人格、风格、时间感知、工具偏好 | 仅人工 | opencode `instructions` |
-| `rules/admin.md` | 权威静态事实（身份、权限、邮箱、微信 user_id、运行环境） | 仅人工 | opencode `instructions` |
+| `rules/AGENTS.md` | 人格、风格、时间感知、工具偏好 | 仅人工 | pi `--append-system-prompt` |
+| `rules/admin.md` | 权威静态事实（身份、权限、邮箱、微信 user_id、运行环境） | 仅人工 | pi `--append-system-prompt` |
 | `memory/*.md` | 动态事实（基础档案、健康、偏好、工作、投资、近况） | agent（用户明确要求时）+ 人工 | 生成的记忆块，常驻注入 |
 
 分层的意义：agent 只能写 `memory/`，改不到人格与权威设定；会变的事实只存在 `memory/` 一处，
@@ -26,19 +26,12 @@ Python 侧不参与写入，只负责渲染注入块和维护 git 快照。
 
 ## 注入机制
 
-关键约束：opencode 的 preamble 只在会话首轮发送（`include_preamble=session_id is None`），
-所以写入协议**必须走常驻通道**，否则第二轮起 agent 就不知道该写记忆了。
+`app/memory.py` 把「写入协议 + 常驻类别全文 + 非常驻类别索引」渲染到
+`runtime/server/memory-context.md`，`PiCliClient` 每轮通过 `--append-system-prompt <path>` 注入
 
-因此 `app/memory.py` 把「写入协议 + 常驻类别全文 + 非常驻类别索引」渲染成单个文件
-`runtime/server/memory-context.md`，两条注入路径共用同一份内容：
+写入协议必须每轮在场，不能依赖仅首轮发送的 skills 摘要。每轮都会启动新的 pi 进程并读取规则与记忆文件，修改下一轮即生效；不把这些内容拼进 user 历史，也不由 `SessionManager` 保存副本
 
-- **opencode 后端**：文件路径追加进 `instructions`（`opencode_cli.py::_build_config_content`）。
-  每轮对话都会 spawn 新进程重建 config，所以记忆改完下一轮即生效。
-- **claude / qodercli 后端**：`app/rules.py::load_system_rules()` 末尾追加记忆块。
-- **codex 后端**：本就没有 rules 注入，不涉及。
-
-定时任务（每日简报）自动获益：`daily:<id>:<日期>` 每天是新 session，但常驻记忆随
-`instructions` 注入，所以简报 agent 具备跨天的事实基础。
+定时任务 `daily:<id>:<日期>` 每天使用新 session，但常驻记忆仍经同一 system 通道注入，保持跨天的事实基础
 
 ## 配置
 
@@ -100,5 +93,5 @@ memory/                        → 记忆内容（仅 README 入库，其余 git
 runtime/memory-git/            → 快照仓 git dir（无 remote，不入库）
 lib/python/app/memory.py       → 渲染注入块 + git 快照维护
 skills/memory/SKILL.md         → agent 的完整操作规范
-runtime/server/memory-context.md → 渲染产物，供 opencode instructions 读取
+runtime/server/memory-context.md → 渲染产物，供 pi --append-system-prompt 读取
 ```

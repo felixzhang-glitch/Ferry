@@ -2,36 +2,38 @@
 
 ## 产品定位
 
-个人使用的 IM → 本机 CLI agent 桥：通过飞书 / 微信与本机运行的 CLI agent（默认 pi）对话，agent 能力全由 CLI 原生承载，codeClaw 只做编排。
+个人使用的 IM → 本机 pi 桥：通过飞书 / 微信与 pi 对话，agent 能力由 pi 原生承载，codeClaw 只做消息编排与渠道适配
 
 ## 功能项清单
 
-> 新增需求先更新本表再开发，保证多轮开发不偏离。状态取值：规划中 / 开发中 / 已完成 / 已废弃。
+> 状态取值：规划中 / 开发中 / 已完成 / 已废弃。单 pi 收敛已完成自动化回归；“已完成”表示实现完成，不代表真实渠道上线验收
 
 | 功能 | 状态 | 描述 |
 |---|---|---|
-| 飞书渠道 | 已完成 | WS 长连接 + webhook 双入口，签名校验、解密、格式化回发、图片/文件处理 |
-| 微信渠道 | 已完成 | iLink Bot 长轮询 sidecar（Node.js）转发，webhook token 校验 |
-| 多后端路由 | 已完成 | `/pi` `/opencode` `/codex` `/claude` `/qodercli` 运行时切换，状态持久化；pi 为默认，opencode 为主要备选，其余只维护不投入新特性 |
-| 会话映射 | 已完成 | `user_id:chat_id` → session_id 映射；pi 原生 session 自管，备选后端 FIFO 历史拼接（默认 50 轮） |
-| 会话命令 | 已完成 | `/new` `/reset` `/stop`、消息去重、同会话连发 FIFO 排队 |
-| 定时提醒 | 已完成 | `/remind 10m 喝水`，时间解析 + 持久化，重启恢复 |
-| 每日任务 | 已完成 | `/daily 08:00 简报`，创建 / list / cancel，重启恢复，飞书 + 微信双推送 |
-| 时间感知 | 已完成 | 每轮注入带时段的系统时间，文本由 `app/clock.py` 统一生成：pi 走 `--append-system-prompt`，claude/qodercli/codex 拼 prompt 首行，opencode 走 `hooks/inject-time.js` |
-| 规则与技能热加载 | 已完成 | `rules/` 与 `skills/` 改完即生效，无需重启 |
-| 长期记忆 | 已完成 | `memory/` 目录，明确要求时写入并回执，常驻注入，快照仓本地无 remote |
-| 文件消息处理 | 已完成 | 文件自动归档，图片自动下载交给 agent |
-| 推送密钥扫描 | 已完成 | pre-push 钩子扫描待推送新增行，fail-closed 硬阻断 |
+| 飞书渠道 | 已完成 | WS 长连接 + webhook 入口，签名校验、解密、格式化回发、图片/文件处理 |
+| 微信渠道 | 已完成 | iLink Bot sidecar，webhook token 校验，文本、入站图片/文件归档及出站文件 |
+| 多后端路由 | 已废弃 | 删除其它 CLI 实现与后端选择状态，旧切换命令仅提示已移除 |
+| 唯一 pi 接入 | 已完成 | `app.main` 直接装配 `PiCliClient`；`/backend`、`/pi` 只读状态，不切换、不重置会话 |
+| 会话与附件 | 已完成 | pi 管历史与压缩，客户端管 session 映射；`SessionManager` 仅管 key 与 pending_files，两渠道每轮只传 user |
+| 会话命令 | 已完成 | `/new`、`/reset` 清附件与 pi 映射；`/compact`、`/compress` 只提示 pi 原生管理；保留 `/stop`、去重与 FIFO 排队 |
+| 定时提醒 | 已完成 | 飞书 `/remind 10m 喝水`，时间解析、持久化与恢复；保留微信现有限制 |
+| 每日任务 | 已完成 | `/daily 08:00 简报`，创建 / list / cancel，持久化恢复，飞书 + 微信推送 |
+| 时间感知 | 已完成 | 每轮由 `app.clock` 生成时间与时段，经 pi `--append-system-prompt` 注入 |
+| 规则与技能热加载 | 已完成 | `rules/` 下一轮重读；`app.skills` 提供实时查询，技能摘要在新会话首轮注入 |
+| 长期记忆 | 已完成 | `memory/` 明确要求时写入并回执，常驻注入，本地快照仓无 remote |
+| 文件与图片 | 已完成 | 入站归档与附件通知、飞书图片回复、双渠道 `/push/file`；收敛不减少既有能力 |
+| 配置迁移兼容 | 已完成 | 后端参数统一 `PI_*`，旧共享键仅作回退；`GENERATED_IMAGES_DIR` 接替旧键；不自动迁移目录或删除数据 |
+| 推送密钥扫描 | 已完成 | pre-push 扫描待推送新增行，fail-closed 阻断 |
 
 ## 非目标
 
-> 明确不做什么，防止范围蔓延。
+- 不重复实现 pi 原生历史、上下文压缩和工具能力
+- 不引入数据库 / Redis，不做多实例部署
+- 不保留其它后端、切换路由或扩展框架
+- 不在本次修改真实配置、用户运行数据，也不重启上线
 
-- 不造智能：不做内置 prompt 工程、RAG、workflow，agent 原生能做的桥接层一律不重复实现
-- 不引入外部存储：纯文件持久化，不接数据库 / Redis
-- 不做多实例：单实例个人部署
-- 备选后端（codex / claude / qodercli）不投入新特性，只维护并关注 CLI 升级后的行为变化
+## 待验证问题
 
-## 用户反馈与待验证问题
-
-- `TODO: 待补充`
+- 真实飞书 / 微信、模型、规则及记忆写入链路尚需上线前手动冒烟
+- 新旧配置优先级、cwd、会话与附件、总超时及取消已有隔离回归；服务未重启，实际运行状态尚未切换
+- 用例数量和运行结果以最终实际执行为准，见 [TEST.md](TEST.md) 与 [functional-tests.md](functional-tests.md)
