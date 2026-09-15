@@ -85,7 +85,7 @@ curl --fail http://127.0.0.1:8080/healthz
 
 文件归档后不主动唤醒 pi，路径通知搭载下一轮文本；飞书图片会下载并交给 pi 处理。出站文件统一走 `POST /push/file`，须配置 `PUSH_API_TOKEN`，详见 [渠道接入](docs/channels.md)
 
-`rules/AGENTS.md`、私有 `rules/admin.md` 与长期记忆通过 `--append-system-prompt` 每轮重新读取。时间与时段也走 system prompt，不写入 user transcript。长期记忆仅在用户明确要求时由 agent 写入，详见 [记忆设计](docs/memory.md)
+`rules/system.md`、私有 `rules/admin.md` 与长期记忆通过 `--append-system-prompt` 每轮重新读取。时间与时段也走 system prompt，不写入 user transcript。长期记忆仅在用户明确要求时由 agent 写入，详见 [记忆设计](docs/memory.md)
 
 `app.skills` 扫描项目及本机技能目录，`/skills` 可实时查询；技能摘要只在新会话首轮注入，新增技能后可用 `/new` 刷新摘要
 

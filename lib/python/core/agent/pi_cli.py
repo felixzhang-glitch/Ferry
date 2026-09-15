@@ -456,10 +456,17 @@ class PiCliClient:
         `--append-system-prompt` reads a path's contents (verified against pi
         0.83.0). These files are reread each turn, not stored in the transcript.
         """
+        rules_system = os.path.join(_PROJECT_ROOT, "rules", "system.md")
+        if not os.path.isfile(rules_system):
+            # 静默丢规则 = 模型变得"不像自己"，比启动报错更糟。
+            logger.warning(
+                "rules/system.md is missing; public rules won't reach the system prompt",
+                extra={"event": "pi.rules_missing"},
+            )
         paths = [
             path
             for path in (
-                os.path.join(_PROJECT_ROOT, "rules", "AGENTS.md"),
+                rules_system,
                 os.path.join(_PROJECT_ROOT, "rules", "admin.md"),
             )
             if os.path.isfile(path)

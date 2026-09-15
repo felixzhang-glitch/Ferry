@@ -6,7 +6,7 @@ codeClaw 的"记忆"分三层，职责与可写方严格分离：
 
 | 载体 | 内容 | 谁可写 | 注入方式 |
 |------|------|--------|----------|
-| `rules/AGENTS.md` | 人格、风格、时间感知、工具偏好 | 仅人工 | pi `--append-system-prompt` |
+| `rules/system.md` | 人格、风格、时间感知、工具偏好 | 仅人工 | pi `--append-system-prompt` |
 | `rules/admin.md` | 权威静态事实（身份、权限、邮箱、微信 user_id、运行环境） | 仅人工 | pi `--append-system-prompt` |
 | `memory/*.md` | 动态事实（基础档案、健康、偏好、工作、投资、近况） | agent（用户明确要求时）+ 人工 | 生成的记忆块，常驻注入 |
 

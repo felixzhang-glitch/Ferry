@@ -106,7 +106,7 @@ codeClaw 的长期记忆。记忆内容保存在项目根 `memory/` 目录，每
 
 ## 硬约束
 
-- 禁止修改 `rules/AGENTS.md` 和 `rules/admin.md`。那是人工维护的人格与权威设定，
+- 禁止修改 `rules/system.md` 和 `rules/admin.md`。那是人工维护的人格与权威设定，
   记忆只能写 `memory/` 下的类别文件。
 - 禁止新建 `MEMORY_CATEGORIES` 之外的记忆文件。
 - 每次写入后必须回执，让用户能当场发现记错。

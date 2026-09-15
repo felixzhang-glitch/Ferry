@@ -12,6 +12,7 @@ fixtures never carried it, because the client only reads
 
 import asyncio
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -388,8 +389,26 @@ def test_system_prompt_files_carry_rules_and_memory(tmp_path) -> None:
     with patch("core.agent.pi_cli.memory.write_context_file", return_value=memory_path):
         paths = PiCliClient._system_prompt_files()
 
-    assert any(path.endswith("rules/AGENTS.md") for path in paths)
+    assert any(path.endswith("rules/system.md") for path in paths)
     assert paths[-1] == memory_path
+
+
+def test_public_rules_file_exists_at_the_renamed_path() -> None:
+    """改名防护：rules/system.md 缺失时 pi_cli 会静默跳过规则注入。"""
+    root = Path(__file__).resolve().parents[1]
+    assert (root / "rules" / "system.md").is_file()
+
+
+def test_missing_public_rules_warns_but_does_not_raise(tmp_path, caplog) -> None:
+    with (
+        patch("core.agent.pi_cli._PROJECT_ROOT", str(tmp_path)),
+        patch("core.agent.pi_cli.memory.write_context_file", return_value=""),
+    ):
+        with caplog.at_level("WARNING", logger="core.agent.pi_cli"):
+            paths = PiCliClient._system_prompt_files()
+
+    assert not any(path.endswith("rules/system.md") for path in paths)
+    assert any("rules/system.md is missing" in record.message for record in caplog.records)
 
 
 def test_memory_failure_never_breaks_a_turn(tmp_path) -> None:
@@ -444,7 +463,7 @@ def test_clock_rides_the_system_prompt_after_rules_and_memory(tmp_path) -> None:
     with patch.object(
         PiCliClient,
         "_system_prompt_files",
-        return_value=["rules/AGENTS.md", "memory-context.md"],
+        return_value=["rules/system.md", "memory-context.md"],
     ):
         command = client._build_command(session_id="abc123")
 
@@ -452,7 +471,7 @@ def test_clock_rides_the_system_prompt_after_rules_and_memory(tmp_path) -> None:
         command[i + 1] for i, arg in enumerate(command) if arg == "--append-system-prompt"
     ]
 
-    assert injected[:2] == ["rules/AGENTS.md", "memory-context.md"]
+    assert injected[:2] == ["rules/system.md", "memory-context.md"]
     # The clock is passed as text, generated fresh for this turn's process.
     assert injected[-1].startswith("当前系统时间: ")
 

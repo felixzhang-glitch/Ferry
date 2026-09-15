@@ -58,7 +58,7 @@ pi list / pi install <source> / pi remove <source> / pi update [source|self]
 ```bash
 pi --mode json --session-id <id> [--model <provider/model>] \
    [--thinking <level>] [--tools <list>] \
-   --append-system-prompt <rules/AGENTS.md> \
+   --append-system-prompt <rules/system.md> \
    --append-system-prompt <rules/admin.md> \
    --append-system-prompt <runtime/server/memory-context.md> \
    --append-system-prompt "<当前系统时间: …>" \

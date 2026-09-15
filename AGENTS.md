@@ -38,7 +38,7 @@ lib/python/
 lib/js/wechat-sidecar.mjs → 微信 iLink Bot 长轮询 sidecar（Node.js）
 bin/server        → 服务控制（start/stop/restart/status/wx login|start|stop）
 conf/.env.example → 全部配置项及默认值（配置绑定在 lib/python/app/config.py）
-rules/            → 注入 pi 的规则：AGENTS.md 公共 / admin.md 私有（gitignored），走 `--append-system-prompt`
+rules/            → 注入 pi 的规则：system.md 公共 / admin.md 私有（gitignored），走 `--append-system-prompt`
 skills/           → 项目级 skills；每轮时间通过 pi system prompt 注入，不落入会话历史
 docs/index.md     → 项目文档索引 **重点，不了解项目的话优先看这里**
 ```
