@@ -11,10 +11,7 @@ __pycache__/
 logs/
 runtime/
 runtime/codex-workdir/config/
-.qoder/*
-!.qoder/AGENTS.md
-!.qoder/hooks/
-.qoder/hooks/secret-allowlist.local.txt
+.qoder/
 rules/admin.md
 /memory/*
 !/memory/README.md
