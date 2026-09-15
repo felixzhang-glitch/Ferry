@@ -25,7 +25,7 @@ Python + FastAPI 提供服务，Node.js sidecar 接入微信。单实例、文�
 
 ## 快速开始
 
-准备 Python 环境和可用的 pi CLI，先完成 pi 的模型配置；微信接入另外需要 Node.js。pi 参数和模型模板见 [pi CLI 参考](docs/references/pi-cli.txt)
+准备 Python 环境和可用的 pi CLI，先完成 pi 的模型配置；微信接入另外需要 Node.js。pi 参数与模型注册见 [pi CLI 参考](docs/references/pi-cli.txt)
 
 ```bash
 # 仅首次创建，保留已有配置
@@ -35,7 +35,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r conf/requirements.txt
 ```
 
-编辑 `conf/.env`，填写飞书凭证 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，并确认 `PI_CLI_BIN`、`PI_MODEL` 及模型服务凭证。模型注册模板在 `conf/pi/`，真实密钥不要提交到仓库
+编辑 `conf/.env`，填写飞书凭证 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，并确认 `PI_CLI_BIN`、`PI_MODEL` 及模型服务凭证 `DASHSCOPE_API_KEY`。候选模型与元数据在 `conf/pi/models.json`（服务启动时自动同步到 `~/.pi/agent/models.json`），真实密钥不要提交到仓库
 
 未使用进程管理器时：
 
@@ -96,7 +96,7 @@ curl --fail http://127.0.0.1:8080/healthz
 | 配置 | 说明 |
 |---|---|
 | `PI_CLI_BIN` | pi 命令名或绝对路径，默认 `pi` |
-| `PI_MODEL` | `provider/model-id`，留空使用 pi 配置 |
+| `PI_MODEL` | `provider/model-id`；切换模型改这一行 + 重启（候选在 `conf/pi/models.json` 自动同步）；留空使用 pi 配置 |
 | `PI_WORK_DIR` | pi 最终工作目录，默认 `./runtime/codex-workdir/pi` |
 | `PI_SESSION_STORE_PATH` | 会话映射文件，默认 `./runtime/server/pi-sessions.json` |
 | `PI_TIMEOUT_SECONDS` | 每次 CLI 尝试总时限，默认 300 秒，不包含排队与重试退避 |
@@ -120,7 +120,7 @@ node --test tests/wechat-sidecar.test.mjs
 
 ```text
 bin/          服务控制与托管启动入口
-conf/         环境配置与 pi 模型模板
+conf/         环境配置与 pi 模型注册表
 lib/python/   应用、渠道、pi 客户端与会话队列
 lib/js/       微信 sidecar
 rules/        公共规则与私有管理员设定

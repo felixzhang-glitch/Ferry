@@ -14,12 +14,13 @@
 | 微信渠道 | 已完成 | iLink Bot sidecar，webhook token 校验，文本、入站图片/文件归档及出站文件 |
 | 多后端路由 | 已废弃 | 删除其它 CLI 实现与后端选择状态，旧切换命令仅提示已移除 |
 | 唯一 pi 接入 | 已完成 | `app.main` 直接装配 `PiCliClient`；`/backend`、`/pi` 只读状态，不切换、不重置会话 |
+| 模型注册与切换 | 已完成 | `conf/pi/models.json` 版本化，启动自动同步到 `~/.pi/agent/`；切模型只改 `PI_MODEL` + 重启，未注册启动告警 |
 | 会话与附件 | 已完成 | pi 管历史与压缩，客户端管 session 映射；`SessionManager` 仅管 key 与 pending_files，两渠道每轮只传 user |
 | 会话命令 | 已完成 | `/new`、`/reset` 清附件与 pi 映射；`/compact`、`/compress` 只提示 pi 原生管理；保留 `/stop`、去重与 FIFO 排队 |
 | 定时提醒 | 已完成 | 飞书 `/remind 10m 喝水`，时间解析、持久化与恢复；保留微信现有限制 |
 | 每日任务 | 已完成 | `/daily 08:00 简报`，创建 / list / cancel，持久化恢复，飞书 + 微信推送 |
-| 时间感知 | 已完成 | 每轮由 `app.clock` 生成时间与时段，经 pi `--append-system-prompt` 注入 |
-| 规则与技能热加载 | 已完成 | `rules/` 下一轮重读；`app.skills` 提供实时查询，技能摘要在新会话首轮注入 |
+| 时间感知 | 已完成 | 每轮由 `app.clock` 生成时间、时段与相对日期（昨天/明天/本周/下周），经 pi `--append-system-prompt` 注入；禁止心算与复读历史表述 |
+| 规则与技能热加载 | 已完成 | `rules/system.md` 下一轮重读；`app.skills` 提供实时查询，技能摘要在新会话首轮注入 |
 | 长期记忆 | 已完成 | `memory/` 明确要求时写入并回执，常驻注入，本地快照仓无 remote |
 | 文件与图片 | 已完成 | 入站归档与附件通知、飞书图片回复、双渠道 `/push/file`；收敛不减少既有能力 |
 | 配置迁移兼容 | 已完成 | 后端参数统一 `PI_*`，旧共享键仅作回退；`GENERATED_IMAGES_DIR` 接替旧键；不自动迁移目录或删除数据 |

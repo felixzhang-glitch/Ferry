@@ -33,10 +33,10 @@
 | 每日任务与提醒恢复 | `tests/test_daily_scheduler.py`、`tests/test_reminder_scheduler.py` | 单元 |
 | 长期记忆注入 | `tests/test_memory.py` | 单元 |
 | pi 调用、原生会话与错误语义 | `tests/test_pi_session.py`、`tests/test_pi_chain.py` | 单元 |
-| 时间注入 | `tests/test_clock.py`、`tests/test_pi_session.py` | 单元 |
+| 时间注入与相对日期 | `tests/test_clock.py`、`tests/test_pi_session.py` | 单元 |
 | skills 发现与摘要 | `tests/test_skills.py` | 单元 |
 | 配置迁移与最终 cwd | `tests/test_config.py` | 单元 |
-| 仅依赖 pi 的启动检查 | `tests/test_server_startup.py` | 脚本 |
+| pi 启动检查与模型注册同步 | `tests/test_server_startup.py` | 脚本 |
 | 出站文件与鉴权 | `tests/test_feishu_file_send.py`、`tests/test_push_file_route.py`、`tests/wechat-sidecar.test.mjs` | 单元 / 路由 |
 | pre-push 密钥扫描 | `tests/test_secret_scan.py` | 单元 |
 

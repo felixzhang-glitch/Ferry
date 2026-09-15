@@ -3,6 +3,40 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-09-15 · rules/AGENTS.md 更名 rules/system.md + 规则缺失告警
+
+- **需求**：消除与根 `AGENTS.md`（开发文档）的撞名。`AGENTS.md` 之名源于 opencode 时代 `{work_dir}/AGENTS.md` 原生加载，opencode 移除后已无用途
+- **改动**：文件更名（内容零变化）；`pi_cli._system_prompt_files` 切换路径并新增缺失告警（此前文件缺失会静默跳过，规则无声失效）；`app/memory.py` 记忆协议、`skills/memory/SKILL.md` 与文档同步
+- **影响范围**：`rules/system.md`、`core/agent/pi_cli.py`、`app/memory.py`、`tests/test_pi_session.py`（+2 防护测试）、`README.md`、`AGENTS.md`、`docs/{memory.md,references/pi-cli.txt}`
+- **验证**：全量 471 passed；重启后系统提示四件套（system.md / admin.md / memory-context.md / 时间块）齐全
+
+## 2026-09-15 · 时间感知修复：相对日期预计算 + 禁止复读历史表述
+
+- **需求**：用户报告「时间又混乱了」——微信会话中模型把"明天生日"复读成 4 天前（9/11）当时正确的"下周三"
+- **排查**：注入机制无误（本轮注入的时间完全正确，模型亦承认"是换算错不是注入错"）。三处结构缺口：①历史里的相对时间表述不会自动过期；②旧 hook 时代（opencode 插件 `inject-time.js`）的 `<system-context>` 前缀持久化在会话历史（飞书 25 处 / 微信 2 处），持续提供旧锚点；③注入只给"现在"，"明天/周几/下周X"全靠心算
+- **改动**：`app/clock.py` 注入块升级为四行（当前时间 / 相对日期 / 本周·下周范围 / 强化 directive：禁止心算、历史时间戳与相对说法一律过期不得复读）；`rules/system.md` 时间感知段同步（含 `date -d` 兜底）
+- **影响范围**：`lib/python/app/clock.py`、`rules/system.md`、`tests/test_clock.py`（+2 用例：9/15 场景、跨月跨周边界）
+- **验证**：全量 469 passed；生产 settings 构建的命令确认四行块进入 `--append-system-prompt`
+- **遗留**：两个活跃会话里 27 处旧 `<system-context>` 时间块未清洗（用户选择保留），由新 directive 压制
+
+## 2026-09-15 · 模型切换 deepseek-v4.1-flash + 注册表入仓自动同步
+
+- **需求**：用户要求「conf/.env 为唯一配置源」，改 `PI_MODEL` 即切模型。排查发现两处独立配置各自为政：`.env` 只决定 `--model`；`~/.pi/agent/models.json` 决定元数据与可用性且靠手工维护——只改 .env 不生效，未注册模型会被 pi 以 "custom model id" 警告后透传（元数据退化为默认 128K）
+- **注册表入仓**：`conf/pi/models.json.example` 升级为正式版本化 `conf/pi/models.json`，收录新上线的 `deepseek-v4.1-flash`（1M / 16.4K / reasoning / 多模态）与 `deepseek-v4-flash-0731`（保底回退）
+- **启动自动同步**：`bin/server` 新增 `sync_pi_models`，挂入 `bin/run-app` 与 `start_app` 双路径；字节对比后有差异才写 `~/.pi/agent/models.json`，写前备份 `models.json.bak.时间戳`；`PI_MODEL` 未注册启动告警；同步失败只告警不阻断
+- **切换流程**：此后切模型只改 `conf/.env` `PI_MODEL` + `supervisorctl restart codeclaw-stack:codeclaw`；加新模型只改 `conf/pi/models.json`
+- **影响范围**：`conf/pi/models.json`（新增）、`bin/{server,run-app}`、`conf/.env(.example)` 注释、`tests/test_server_startup.py`（+4）、`README.md`、`docs/{routing,functional-tests,PRODUCT,TEST}.md`
+- **验证**：全量 467 passed；重启日志出现同步记录、家目录文件与仓内一致（旧文件已备份）；`--list-models` 双条目（v4.1-flash：1M/16.4K/thinking yes/images yes）；实跑无 custom model 警告、thinking 事件正常
+
+## 2026-09-15 · 配置与仓库清理：.env 收敛 + .qoder 忽略 + 死文件清理
+
+- **需求**：v0.8.0 收敛唯一后端后，清理四后端时代残留，消除误导
+- **conf/.env**：删除 21 个零引用死键（`CODEX_*`/`CLAUDE_*`/`QODERCLI_*`/`OPENCODE_*` 后端项与 `ACTIVE_BACKEND`、`BACKEND_STATE_PATH`、`MAX_HISTORY_ROUNDS` 等）；7 个仍生效的旧别名改新名（`CODEX_WORK_DIR` → `PI_WORK_DIR=./runtime/codex-workdir/pi`）。注意：`CODEX_TIMEOUT_SECONDS=180` 早已失效，pi 实际超时为默认 300s
+- **文件清理**：`runtime/server/{backend.json,opencode-sessions.json}`、`runtime/codex-workdir/{claude,opencode,qodercli}`、`conf/runtime`、`conf/.pytest_cache`、`conf/opencode` 空壳、旧「每日股市摘要」cron 定义（claude 后端已无执行通道）删除；`runtime/.env.bak-20260915` 备份保留；`conf/pytest.ini`、`conf/requirements.txt` 经引用检查为在用，保留
+- **仓库**：`.qoder/` 整目录加入 .gitignore 并取消跟踪（不再随 GitHub 分发）；`docs/codeclaw-analysis.html` 旧分析快照删除
+- **影响范围**：`conf/.env`（gitignored）、`.gitignore`、`docs/index.md`；无代码改动
+- **验证**：清理前后 .env 解析的生效配置程序化对比零差异；全量 463 passed；重启后服务健康
+
 ## 2026-09-11 · README 更新与重启记录
 
 - **需求**：按当前单 pi 架构更新 README，补充部署方式、命令、配置迁移、测试与运维说明

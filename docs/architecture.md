@@ -47,7 +47,7 @@ graph TB
 ```
 codeClaw/
 ├── bin/                        # 服务控制脚本
-├── conf/                       # 配置模板、依赖、pytest 配置
+├── conf/                       # 配置模板、模型注册表、依赖、pytest 配置
 ├── lib/
 │   ├── python/
 │   │   ├── app/                # 入口、配置、命令、skills、记忆、时间、日志

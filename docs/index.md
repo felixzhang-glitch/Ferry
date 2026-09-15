@@ -15,6 +15,5 @@
 | [SECURITY.md](SECURITY.md) | 安全要求：密钥扫描、签名校验、敏感数据 |
 | [RELIABILITY.md](RELIABILITY.md) | 可靠性与运维：部署、故障处理 |
 | [QUALITY_SCORE.md](QUALITY_SCORE.md) | 质量评分基线与复评记录 |
-| [../.qoder/hooks/README.md](../.qoder/hooks/README.md) | 推送前密钥扫描钩子：安装、覆盖范围、误报处理 |
+| [../.qoder/hooks/README.md](../.qoder/hooks/README.md) | 推送前密钥扫描钩子：安装、覆盖范围、误报处理（`.qoder` 不入库，此类文件仅本机可见） |
 | [references/README.md](references/README.md) | 外部参考资料：[pi-cli.txt](references/pi-cli.txt)（唯一后端）、[feishu-bot-api.md](references/feishu-bot-api.md)、[wechat-ilink.md](references/wechat-ilink.md) |
-| [codeclaw-analysis.html](codeclaw-analysis.html) | 2026-08-28 历史分析快照，不代表当前架构或测试结果 |
