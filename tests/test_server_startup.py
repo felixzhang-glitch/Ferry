@@ -137,6 +137,63 @@ def test_existing_git_boundary_is_preserved(sandbox):
     assert boundary.read_text() == "gitdir: /historical/worktree\n"
 
 
+def test_sync_pi_models_copies_registry_and_warns_unregistered(sandbox):
+    registry = sandbox / "conf/pi/models.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_text(
+        json.dumps({"providers": {"bailian": {"models": [{"id": "deepseek-v4.1-flash"}]}}}),
+        encoding="utf-8",
+    )
+    result = run_helpers(
+        sandbox,
+        "sync_pi_models\nsync_pi_models\n",
+        "PI_MODEL='bailian/not-registered'\n",
+        HOME=str(sandbox),
+    )
+    assert result.returncode == 0, result.stderr
+    target = sandbox / ".pi/agent/models.json"
+    assert target.read_bytes() == registry.read_bytes()
+    assert result.stdout.count("[INFO] pi models.json 已同步") == 1
+    assert not list((sandbox / ".pi/agent").glob("models.json.bak.*"))
+    assert "bailian/not-registered" in result.stderr
+    assert "未在 conf/pi/models.json 注册" in result.stderr
+
+
+def test_sync_pi_models_backs_up_before_replacing(sandbox):
+    agent_dir = sandbox / ".pi/agent"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "models.json").write_text('{"providers": {}}\n', encoding="utf-8")
+    registry = sandbox / "conf/pi/models.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_text(
+        json.dumps({"providers": {"bailian": {"models": [{"id": "deepseek-v4.1-flash"}]}}}),
+        encoding="utf-8",
+    )
+    result = run_helpers(
+        sandbox,
+        "sync_pi_models\n",
+        "PI_MODEL='bailian/deepseek-v4.1-flash'\n",
+        HOME=str(sandbox),
+    )
+    assert result.returncode == 0, result.stderr
+    assert (agent_dir / "models.json").read_bytes() == registry.read_bytes()
+    backups = list(agent_dir.glob("models.json.bak.*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == '{"providers": {}}\n'
+    assert "未在 conf/pi/models.json 注册" not in result.stderr
+
+
+def test_sync_pi_models_skips_cleanly_without_registry(sandbox):
+    result = run_helpers(sandbox, "sync_pi_models; echo done\n", "", HOME=str(sandbox))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "done"
+    assert not (sandbox / ".pi").exists()
+
+
+def test_runner_syncs_pi_models_on_start():
+    assert "sync_pi_models" in RUN_APP.read_text()
+
+
 def test_load_env_preserves_overrides_quotes_and_literal_data(sandbox):
     file_text = """export PI_CLI_BIN = '/custom/pi cli' # comment
 PI_WORK_DIR="./cwd with spaces"

@@ -12,5 +12,9 @@ export PATH="/root/.local/bin:/root/.nvm/versions/node/v20.19.4/bin:/root/.pyenv
 source "$ROOT_DIR/bin/server"
 load_env
 
+# Keep the pi model registry in sync so PI_MODEL in conf/.env is the single
+# switch; sync failures warn but never block startup.
+sync_pi_models || echo "[WARN] pi models.json 同步失败，继续启动"
+
 exec /root/.pyenv/versions/3.10.13/bin/python -m uvicorn app.main:app \
   --host "${SERVER_HOST:-0.0.0.0}" --port "${SERVER_PORT:-8080}"

@@ -121,6 +121,59 @@ print(os.path.abspath(os.path.expanduser(sys.argv[1])))
 PY
 }
 
+# Sync the versioned pi model registry into the agent dir so `PI_MODEL` in
+# conf/.env is the single switch. Byte compare first: identical content stays
+# untouched; a change is backed up next to the target before being replaced.
+sync_pi_models() {
+  local src="$ROOT_DIR/conf/pi/models.json"
+  if [[ ! -f "$src" ]]; then
+    return 0
+  fi
+  local agent_dir pi_model
+  agent_dir="$(get_effective_value PI_CODING_AGENT_DIR)"
+  agent_dir="${agent_dir:-$HOME/.pi/agent}"
+  pi_model="$(get_effective_value PI_MODEL)"
+  "$(env_python)" - "$src" "$agent_dir" "$pi_model" <<'PY'
+import json
+import os
+import shutil
+import sys
+import time
+
+src, agent_dir, pi_model = sys.argv[1], os.path.expanduser(sys.argv[2]), sys.argv[3]
+with open(src, "rb") as handle:
+    data = handle.read()
+
+target = os.path.join(agent_dir, "models.json")
+current = None
+if os.path.exists(target):
+    with open(target, "rb") as handle:
+        current = handle.read()
+
+if current != data:
+    os.makedirs(agent_dir, exist_ok=True)
+    if current is not None:
+        shutil.copy2(target, f"{target}.bak.{time.strftime('%Y%m%d-%H%M%S')}")
+    with open(target, "wb") as handle:
+        handle.write(data)
+    print(f"[INFO] pi models.json 已同步: {src} -> {target}")
+
+# Fail soft: pi still transmits unregistered IDs, but with default metadata.
+if pi_model:
+    provider, _, model_id = pi_model.partition("/")
+    try:
+        models = json.loads(data)["providers"][provider]["models"]
+        registered = {entry.get("id") for entry in models}
+    except (KeyError, TypeError, ValueError):
+        registered = set()
+    if not model_id or model_id not in registered:
+        print(
+            f"[WARN] PI_MODEL={pi_model} 未在 conf/pi/models.json 注册；pi 将以默认元数据透传该模型",
+            file=sys.stderr,
+        )
+PY
+}
+
 ensure_prerequisites() {
   ensure_env_file
   if ! command -v python3 >/dev/null 2>&1; then
@@ -197,6 +250,7 @@ start_app() {
   ensure_dirs
   ensure_prerequisites
   load_env
+  sync_pi_models || echo "[WARN] pi models.json 同步失败，继续启动"
 
   if pid_is_running "$APP_PID_FILE"; then
     echo "[INFO] codeClaw 已在运行，PID=$(cat "$APP_PID_FILE")"
