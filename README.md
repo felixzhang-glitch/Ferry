@@ -1,31 +1,79 @@
 # codeClaw
 
-飞书 / 微信 → pi 的个人助手桥接服务
+把飞书和微信的消息，交给同一个 pi
 
-pi 是唯一后端，负责推理、工具调用、原生会话与上下文压缩。codeClaw 负责消息收发、渠道适配、任务队列和进程管理，后续围绕 pi 持续迭代，不再维护多后端路由
+> 能力归 pi，编排归 codeClaw。不造智能，只做消息收发、渠道适配与进程管理
+
+codeClaw 是一个个人 IM 桥接服务。飞书和微信的消息进来，经过去重、排队、命令分发，交给唯一的后端 pi 处理；pi 的回复再按渠道各自格式化送回去。会话历史、上下文压缩、工具调用全部留在 pi 原生层，桥接层一份都不重复实现
+
+## 设计哲学
+
+两条原则决定了这个项目的形状
+
+**pi-native**：pi 原生支持的能力，桥接层不重复实现。会话靠 pi 的 `--session-id` 续接，压缩靠 pi 自己管，工具调用由 pi 承担。桥接层每轮只发当前这一条消息，历史一字不带
+
+**桥接不膨胀**：不做 prompt 工程，不做 RAG，不做 workflow 引擎，不为想象中的多后端预留路由框架。单实例、文件持久化，不引入 Redis 和数据库。一个个人项目，简单本身就是功能
 
 ## 架构
 
-```text
-飞书 WebSocket / Webhook ─┐
-                         ├→ 命令分发 / 去重 / 会话队列 → PiCliClient → pi CLI
-微信 iLink sidecar ───────┘                                  ↓
-                         ← 渠道格式化 / 文件与图片回传 ← JSONL 回复
+```mermaid
+flowchart LR
+    subgraph channels["渠道"]
+        FS["飞书<br/>WebSocket / Webhook"]
+        WX["微信<br/>iLink Sidecar (Node.js)"]
+    end
+
+    subgraph claw["codeClaw (Python / FastAPI)"]
+        IN["入口层<br/>事件解析 · 签名校验"]
+        CORE["业务层<br/>去重 · 命令分发 · FIFO 队列 · 附件通知"]
+        CLI["PiCliClient<br/>流式 · 重试 · 熔断 · 取消"]
+        OUT["出站层<br/>渠道格式化 · 图片与文件回传"]
+    end
+
+    PI["pi CLI<br/>推理 · 工具调用 · 原生会话 · 上下文压缩"]
+
+    FS --> IN
+    WX --> IN
+    IN --> CORE --> CLI
+    CLI -- "pi --mode json --session-id" --> PI
+    PI -- "JSONL 流式回复" --> CLI
+    CLI --> OUT
+    OUT --> FS
+    OUT --> WX
 ```
 
-Python + FastAPI 提供服务，Node.js sidecar 接入微信。单实例、文件持久化，不依赖数据库或 Redis
+一次请求的完整路径
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant C as 渠道 (飞书/微信)
+    participant B as codeClaw
+    participant P as pi CLI
+
+    U->>C: 发消息
+    C->>B: 事件推送
+    B->>B: 校验 · 去重 · 命令拦截
+    B->>B: 进入会话 FIFO 队列
+    B->>P: 当前 user 消息 + session-id
+    P-->>B: text_delta 流式输出
+    P-->>B: message_end 成败判定
+    B->>C: 格式化 · 分段 · 图片上传
+    C->>U: 回复
+```
 
 ## 能力
 
-- 双渠道对话，支持会话隔离、消息去重、FIFO 排队与任务取消
-- pi 原生会话续接与自动压缩，不在桥接层重复保存对话历史
-- 文件归档与附件通知、飞书图片处理、双渠道文件推送
-- 长期记忆、规则热加载、技能查询、定时提醒与每日任务
-- pi 进程超时、重试、熔断与取消回收；部分流式输出后不重试
+- 双渠道对话：飞书走 WS 长连接，微信走 Node.js sidecar 长轮询，共享同一套会话逻辑
+- 会话隔离与秩序：渠道会话 key → pi session 映射，消息去重，FIFO 排队，任务可取消
+- pi 生命周期管理：超时、重试、熔断、取消回收；部分流式输出后不重试，避免答一半重来
+- 文件与图片：归档后附件通知搭载下一条消息，飞书图片下载交给 pi 处理，双渠道文件推送
+- 长期记忆与规则：`rules/` 与记忆经 `--append-system-prompt` 每轮注入，时间与时段走 system prompt，不污染 transcript
+- 定时能力：`/remind` 一次性提醒，`/daily` 每日任务，均持久化到本地文件
 
 ## 快速开始
 
-准备 Python 环境和可用的 pi CLI，先完成 pi 的模型配置；微信接入另外需要 Node.js。pi 参数与模型注册见 [pi CLI 参考](docs/references/pi-cli.txt)
+前置条件：Python 3.13+、可用的 pi CLI（先完成模型配置）、微信接入另需 Node.js
 
 ```bash
 # 仅首次创建，保留已有配置
@@ -35,18 +83,14 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r conf/requirements.txt
 ```
 
-编辑 `conf/.env`，填写飞书凭证 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，并确认 `PI_CLI_BIN`、`PI_MODEL` 及模型服务凭证 `DASHSCOPE_API_KEY`。候选模型与元数据在 `conf/pi/models.json`（服务启动时自动同步到 `~/.pi/agent/models.json`），真实密钥不要提交到仓库
-
-未使用进程管理器时：
+编辑 `conf/.env`，填写飞书凭证 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，确认 `PI_CLI_BIN`、`PI_MODEL` 及模型服务凭证。候选模型在 `conf/pi/models.json`，启动时自动同步到 `~/.pi/agent/models.json`
 
 ```bash
 ./bin/start
 ./bin/server status
-./bin/server restart
-./bin/server stop
 ```
 
-微信首次登录与独立启动：
+微信首次登录与独立启动
 
 ```bash
 ./bin/server wx login
@@ -55,7 +99,7 @@ python3 -m venv .venv
 
 ### Supervisor 托管
 
-当前部署由 Supervisor 托管，使用已有服务组管理，不要混用 `./bin/server start|restart`，避免重复启动。`./bin/server status` 只检查脚本 PID 文件，不能代表 Supervisor 托管状态
+生产部署走 Supervisor 时，不要混用 `./bin/server start|restart`，避免重复拉起进程
 
 ```bash
 supervisorctl status
@@ -63,49 +107,34 @@ supervisorctl restart 'codeclaw-stack:*'
 curl --fail http://127.0.0.1:8080/healthz
 ```
 
-健康接口返回 `{"status":"ok"}` 表示 HTTP 服务可用，不代表模型调用或渠道收发已验证
+> `/healthz` 只证明 HTTP 服务活着，不代表模型调用或渠道收发已验证
 
 ## 对话命令
 
 | 命令 | 行为 |
 |---|---|
 | `/help` | 查看当前渠道帮助 |
-| `/new`、`/reset` | 清空待处理附件与 pi 会话映射，下轮开启新上下文 |
+| `/new`、`/reset` | 清空附件与 pi 会话映射，下轮开启新上下文 |
 | `/stop` | 取消当前任务并清空排队消息 |
-| `/backend`、`/pi` | 显示唯一后端 pi，不切换或重置会话 |
 | `/skills` | 查询本机可用技能 |
-| `/remind 10m 内容` | 飞书定时提醒，支持 `s/m/h/d`；微信暂不支持 |
-| `/daily 08:00 提示词` | 创建每日任务，支持 `/daily list`、`/daily cancel <id>` |
+| `/remind 10m 内容` | 定时提醒，支持 `s/m/h/d`，微信暂不支持 |
+| `/daily 08:00 提示词` | 每日任务，支持 `list`、`cancel <id>` |
 
-`/compact`、`/compress` 仅说明上下文由 pi 原生管理，不执行手工压缩。旧后端切换命令仅提示已移除
+`/compact` 只说明上下文由 pi 原生管理，不执行手工压缩；旧后端切换命令只提示已移除
 
-## 会话、记忆与技能
+## 配置
 
-`PiCliClient` 维护渠道会话 key → pi session ID 映射。两个渠道每轮只发送当前 user 消息，历史留在 pi；`SessionManager` 只管理附件通知。`/new`、`/reset` 不删除旧 transcript 或归档文件
-
-文件归档后不主动唤醒 pi，路径通知搭载下一轮文本；飞书图片会下载并交给 pi 处理。出站文件统一走 `POST /push/file`，须配置 `PUSH_API_TOKEN`，详见 [渠道接入](docs/channels.md)
-
-`rules/system.md`、私有 `rules/admin.md` 与长期记忆通过 `--append-system-prompt` 每轮重新读取。时间与时段也走 system prompt，不写入 user transcript。长期记忆仅在用户明确要求时由 agent 写入，详见 [记忆设计](docs/memory.md)
-
-`app.skills` 扫描项目及本机技能目录，`/skills` 可实时查询；技能摘要只在新会话首轮注入，新增技能后可用 `/new` 刷新摘要
-
-## 配置与迁移
-
-全部示例见 [conf/.env.example](conf/.env.example)
+全部配置项见 [conf/.env.example](conf/.env.example)，常用的几个
 
 | 配置 | 说明 |
 |---|---|
 | `PI_CLI_BIN` | pi 命令名或绝对路径，默认 `pi` |
-| `PI_MODEL` | `provider/model-id`；切换模型改这一行 + 重启（候选在 `conf/pi/models.json` 自动同步）；留空使用 pi 配置 |
-| `PI_WORK_DIR` | pi 最终工作目录，默认 `./runtime/codex-workdir/pi` |
-| `PI_SESSION_STORE_PATH` | 会话映射文件，默认 `./runtime/server/pi-sessions.json` |
-| `PI_TIMEOUT_SECONDS` | 每次 CLI 尝试总时限，默认 300 秒，不包含排队与重试退避 |
-| `PI_IDLE_TIMEOUT_SECONDS` | 等待下一行 stdout 的空闲时限，默认 120 秒 |
-| `GENERATED_IMAGES_DIR` | 飞书生成图片发现目录 |
+| `PI_MODEL` | `provider/model-id`，改这一行加重启即切换模型 |
+| `PI_WORK_DIR` | pi 工作目录，默认 `./runtime/codex-workdir/pi` |
+| `PI_TIMEOUT_SECONDS` | 单次 CLI 尝试总时限，默认 300 秒 |
+| `PUSH_API_TOKEN` | 出站文件推送 `POST /push/file` 的鉴权 |
 
-新配置键优先，旧 `CODEX_*` 共享参数仅作为迁移回退；旧 `CODEX_WORK_DIR` 需要追加 `/pi` 才对应新 `PI_WORK_DIR`。保留历史目录名称是为兼容已有 pi 会话，不代表仍支持旧后端
-
-不要直接移动现有 cwd、session store 或 `PI_CODING_AGENT_DIR`：恢复会话需要映射与 pi transcript 同时可用。详细规则见 [单 pi 接入与迁移](docs/routing.md)
+迁移注意：旧 `CODEX_*` 键仅作回退；不要直接移动现有 cwd、session store 或 agent dir，恢复会话需要映射与 pi transcript 同时可用。详见 [单 pi 接入与迁移](docs/routing.md)
 
 ## 测试
 
@@ -114,16 +143,16 @@ curl --fail http://127.0.0.1:8080/healthz
 node --test tests/wechat-sidecar.test.mjs
 ```
 
-2026-09-11 回归：463 项 Python 测试、16 项 Node 测试通过。随后已通过 Supervisor 重启主服务与微信 sidecar，健康检查正常；真实模型与渠道实发仍需单独冒烟。验收清单见 [核心功能测试](docs/functional-tests.md)
+验收清单见 [核心功能回归测试](docs/functional-tests.md)，每次迭代必过
 
 ## 项目结构
 
 ```text
 bin/          服务控制与托管启动入口
-conf/         环境配置与 pi 模型注册表
-lib/python/   应用、渠道、pi 客户端与会话队列
+conf/         环境配置、pi 模型注册表、依赖与 pytest 配置
+lib/python/   应用入口、双渠道、PiCliClient、会话与队列
 lib/js/       微信 sidecar
-rules/        公共规则与私有管理员设定
+rules/        注入 pi 的规则：system.md 公共 / admin.md 私有（gitignored）
 skills/       项目级技能
 memory/       长期记忆
 runtime/      会话映射与运行状态
@@ -131,7 +160,9 @@ tests/        Python 与 Node 测试
 docs/         架构、运维与变更记录
 ```
 
-[文档索引](docs/index.md) · [架构](docs/architecture.md) · [会话管理](docs/sessions.md) · [变更记录](docs/requirement-changes.md)
+## 文档
+
+[文档索引](docs/index.md) · [架构设计](docs/architecture.md) · [核心设计信念](docs/core-beliefs.md) · [会话管理](docs/sessions.md) · [变更记录](docs/requirement-changes.md)
 
 ## 许可
 
