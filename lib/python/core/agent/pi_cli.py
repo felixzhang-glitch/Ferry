@@ -101,7 +101,12 @@ class PiCliClient:
                 self._save_sessions()
 
     async def chat(
-        self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None
+        self,
+        messages: list[dict[str, str]],
+        trace_id: str,
+        *,
+        session_key: str | None = None,
+        image_paths: list[str] | None = None,
     ) -> str:
         self._assert_circuit_closed()
 
@@ -109,6 +114,7 @@ class PiCliClient:
         session_holder: dict[str, str] = {}
         prompt = self._build_native_prompt(messages, include_preamble=is_new)
         request_summary = self._summarize_messages(messages)
+        resolved_images = self._resolve_image_paths(image_paths)
         attempt = 0
         start = time.monotonic()
 
@@ -120,6 +126,7 @@ class PiCliClient:
                         trace_id=trace_id,
                         session_id=session_id,
                         session_holder=session_holder,
+                        image_paths=resolved_images,
                     )
                     self._record_success()
                     self._persist_session(session_key, session_holder, expected_id=session_id)
@@ -168,7 +175,12 @@ class PiCliClient:
             self._clear_cancel_request(trace_id)
 
     async def chat_stream(
-        self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None
+        self,
+        messages: list[dict[str, str]],
+        trace_id: str,
+        *,
+        session_key: str | None = None,
+        image_paths: list[str] | None = None,
     ) -> AsyncIterator[str]:
         self._assert_circuit_closed()
 
@@ -176,6 +188,7 @@ class PiCliClient:
         session_holder: dict[str, str] = {}
         prompt = self._build_native_prompt(messages, include_preamble=is_new)
         request_summary = self._summarize_messages(messages)
+        resolved_images = self._resolve_image_paths(image_paths)
         attempt = 0
         start = time.monotonic()
 
@@ -189,6 +202,7 @@ class PiCliClient:
                         trace_id=trace_id,
                         session_id=session_id,
                         session_holder=session_holder,
+                        image_paths=resolved_images,
                     ):
                         emitted = True
                         if len("".join(preview_parts)) < 240:
@@ -287,8 +301,9 @@ class PiCliClient:
         *,
         session_id: str | None = None,
         session_holder: dict[str, str] | None = None,
+        image_paths: list[str] | None = None,
     ) -> AsyncIterator[str]:
-        command = self._build_command(session_id=session_id)
+        command = self._build_command(session_id=session_id, image_paths=image_paths)
         command.append(prompt)
         process = await self._spawn_process(command)
         self._register_process(trace_id, process)
@@ -417,6 +432,7 @@ class PiCliClient:
         *,
         session_id: str | None = None,
         session_holder: dict[str, str] | None = None,
+        image_paths: list[str] | None = None,
     ) -> str:
         parts: list[str] = []
         async for piece in self._run_stream_once(
@@ -424,11 +440,16 @@ class PiCliClient:
             trace_id=trace_id,
             session_id=session_id,
             session_holder=session_holder,
+            image_paths=image_paths,
         ):
             parts.append(piece)
         return "".join(parts).strip()
 
-    def _build_command(self, session_id: str | None = None) -> list[str]:
+    def _build_command(
+        self,
+        session_id: str | None = None,
+        image_paths: list[str] | None = None,
+    ) -> list[str]:
         command = [self._bin, "--mode", "json"]
         if session_id:
             command.extend(["--session-id", session_id])
@@ -447,6 +468,12 @@ class PiCliClient:
         command.extend(["--append-system-prompt", time_context()])
         if self._approve_project:
             command.append("--approve")
+        # pi native multimodal syntax: `pi [@files...] [messages...]`.
+        # Each `@path` positional argument is loaded as an attachment before
+        # the prompt string, so images reach the model as real vision input
+        # instead of a text hint the model may or may not act on.
+        for image_path in image_paths or []:
+            command.append(f"@{image_path}")
         return command
 
     @staticmethod
@@ -762,6 +789,35 @@ class PiCliClient:
         if len(compact) <= limit:
             return compact
         return f"{compact[: limit - 3]}..."
+
+    @staticmethod
+    def _resolve_image_paths(image_paths: list[str] | None) -> list[str]:
+        """Normalize image paths for pi's `@file` multimodal syntax.
+
+        Deduplicates while preserving order, expands `~`, resolves to absolute
+        paths and drops entries that don't exist as regular files. pi is
+        spawned with `cwd=pi_work_dir`, so a relative path would resolve
+        against the wrong directory.
+        """
+        if not image_paths:
+            return []
+        seen: set[str] = set()
+        resolved: list[str] = []
+        for raw in image_paths:
+            if not raw:
+                continue
+            candidate = os.path.abspath(os.path.expanduser(str(raw)))
+            if candidate in seen:
+                continue
+            if not os.path.isfile(candidate):
+                logger.warning(
+                    "image path missing, dropped from pi @file args",
+                    extra={"event": "pi.image_missing", "path": candidate},
+                )
+                continue
+            seen.add(candidate)
+            resolved.append(candidate)
+        return resolved
 
     def _summarize_messages(self, messages: list[dict[str, str]]) -> str:
         segments: list[str] = []

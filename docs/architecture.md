@@ -79,11 +79,11 @@ codeClaw/
 ```
 用户消息 → 飞书 / 微信 → 事件校验与去重
   → 命令直接响应，普通消息进入会话 FIFO 队列
-    → 附件通知搭载当前 user 文本（不拼接历史）
+    → 附件通知搭载当前 user 文本（不拼接历史）；入站图片下载归档为 image_paths
       → PiCliClient.chat_stream() / chat()
-        → pi --mode json --session-id <id> <prompt>
+        → pi --mode json --session-id <id> [@图片路径...] <prompt>
           → JSONL text_delta + 最后一条 assistant message_end 成败判定
             → 渠道格式化 / 分段 / 图片上传 / 回复
 ```
 
-文件归档、图片发现、出站 `/push/file`、定时、长期记忆与队列功能继续保留。时间与规则、记忆经 `--append-system-prompt` 注入；技能发现归 `app.skills`，不依赖已删除的后端模块
+文件归档、图片发现、出站 `/push/file`、定时、长期记忆与队列功能继续保留。入站图片经 pi 原生 `@file` 位置参数作为多模态输入传给模型（飞书图文混排、微信图片均支持）。时间与规则、记忆经 `--append-system-prompt` 注入；技能发现归 `app.skills`，不依赖已删除的后端模块

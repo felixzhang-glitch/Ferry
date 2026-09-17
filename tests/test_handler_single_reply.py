@@ -113,10 +113,10 @@ class FakeAgentClient:
     def __init__(self) -> None:
         self.cancelled = False
 
-    async def chat(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None) -> str:
+    async def chat(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None) -> str:
         return "你好"
 
-    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None):
+    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None):
         for piece in ["你", "好"]:
             yield piece
 
@@ -129,9 +129,11 @@ class RecordingAgentClient(FakeAgentClient):
     def __init__(self) -> None:
         super().__init__()
         self.messages: list[dict[str, str]] = []
+        self.image_paths: list[str] | None = None
 
-    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None):
+    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None):
         self.messages = messages
+        self.image_paths = image_paths
         yield "收到图片"
 
 
@@ -140,7 +142,7 @@ class ImageAgentClient(FakeAgentClient):
         super().__init__()
         self._image_path = image_path
 
-    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None):
+    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None):
         yield f"Generated Image:\nSaved to: file://{self._image_path}"
 
 
@@ -149,7 +151,7 @@ class EmptyImageAgentClient(FakeAgentClient):
         super().__init__()
         self._image_path = image_path
 
-    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None):
+    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None):
         self.messages = messages
         self.session_key = session_key
         self._image_path.write_bytes(b"fake image")
@@ -163,7 +165,7 @@ class BlockingImageAgentClient(FakeAgentClient):
         self._image_path = image_path
         self.cancelled_event = asyncio.Event()
 
-    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None):
+    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None):
         self._image_path.write_bytes(b"fake image")
         while not self.cancelled_event.is_set():
             await asyncio.sleep(0.05)
@@ -183,7 +185,7 @@ class WatchRaceImageAgentClient(FakeAgentClient):
         self._image_path = image_path
         self._image_upload_started_event = image_upload_started_event
 
-    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None):
+    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None):
         self._image_path.write_bytes(b"fake image")
         await asyncio.wait_for(self._image_upload_started_event.wait(), timeout=2.0)
         if False:
@@ -253,9 +255,13 @@ async def test_handle_image_event_downloads_image_and_passes_local_path_to_agent
     await handler._handle_text_event(event=event, trace_id="trace_test")
 
     assert feishu_client.download_image_calls == [("om_image_1", "img_v2_test")]
-    # Images are cleaned up after task completion; verify the path was passed to agent
+    # Images now reach pi through the native `@file` multimodal argument, so the
+    # local path rides image_paths instead of being embedded in the prompt text.
+    assert agent_client.image_paths is not None
+    assert len(agent_client.image_paths) == 1
+    assert agent_client.image_paths[0].endswith(".png")
     prompt = agent_client.messages[-1]["content"]
-    assert "img_v2_test" in prompt or ".png" in prompt
+    assert "img_v2_test" not in prompt
     assert feishu_client.reply_calls[-1][0] == "收到图片"
 
 
@@ -292,11 +298,14 @@ async def test_handle_post_event_downloads_all_images_and_keeps_text(tmp_path) -
     await handler._handle_text_event(event=event, trace_id="trace_test")
 
     assert feishu_client.download_image_calls == [("om_post_1", "img_v2_a"), ("om_post_1", "img_v2_b")]
-    # Images are cleaned up after task completion; verify the paths were passed to agent
+    # Text stays in the prompt; both images ride the multimodal `@file` args.
     prompt = agent_client.messages[-1]["content"]
     assert "记录午餐" in prompt
-    assert "img_v2_a" in prompt or ".png" in prompt
-    assert "img_v2_b" in prompt or ".png" in prompt
+    assert agent_client.image_paths is not None
+    assert len(agent_client.image_paths) == 2
+    assert all(path.endswith(".png") for path in agent_client.image_paths)
+    assert "img_v2_a" not in prompt
+    assert "img_v2_b" not in prompt
 
 
 class BlockingAgentClient:
@@ -304,10 +313,10 @@ class BlockingAgentClient:
         self.cancelled = asyncio.Event()
         self.finished = asyncio.Event()
 
-    async def chat(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None) -> str:
+    async def chat(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None) -> str:
         return "unused"
 
-    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None):
+    async def chat_stream(self, messages: list[dict[str, str]], trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None):
         while not self.cancelled.is_set() and not self.finished.is_set():
             await asyncio.sleep(0.01)
         if self.cancelled.is_set():

@@ -89,7 +89,9 @@ class Settings(BaseSettings):
         default="~/.codex/generated_images",
         validation_alias="GENERATED_IMAGES_DIR",
     )
-    pi_stream_read_limit_bytes: int = Field(default=262144, validation_alias="PI_STREAM_READ_LIMIT_BYTES")
+    # pi --mode json 会在事件行内回显图片 base64（原图×1.33），发图时单行可达数十 MB。
+    # 此值是 asyncio readline 的单行上限，过小会招 LimitOverrunError 导致“服务繁忙”。
+    pi_stream_read_limit_bytes: int = Field(default=33554432, validation_alias="PI_STREAM_READ_LIMIT_BYTES")
     pi_max_retries: int = Field(default=2, validation_alias="PI_MAX_RETRIES")
     pi_retry_backoff_seconds: float = Field(default=1.0, validation_alias="PI_RETRY_BACKOFF_SECONDS")
     pi_circuit_breaker_threshold: int = Field(default=5, validation_alias="PI_CIRCUIT_BREAKER_THRESHOLD")

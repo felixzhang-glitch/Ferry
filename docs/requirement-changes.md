@@ -3,6 +3,22 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-09-17 · 入站图片多模态修复：走 pi 原生 `@file` 语法
+
+- **需求**：当前模型（qwen3.8-flash）支持图片输入，但微信、飞书发图给机器人时模型「看不到」图片。微信只能单独发文字或图片、飞书支持图文混排，两种入站形式都要能正确把图片喂给模型
+- **根因**：pi CLI 官方语法 `pi [options] [@files...] [messages...]` 中的 `@file` 才是多模态输入入口。此前两个渠道都只把图片**路径以文本形式**拼进 prompt（飞书 `[Feishu images saved locally]\n- /path`；微信 sidecar 把图片当 file 归档、只回「已收藏」且 handler 因 text 为空直接 `return []` 不唤醒模型），pi 需主动调 `read` 工具才可能读到，链路不可靠
+- **改动**：
+  - `PiCliClient.chat/chat_stream` 新增 `image_paths` 参数，`_build_command` 在 prompt 前插入 `@{abs_path}` 位置参数；新增 `_resolve_image_paths`（去重、展开 `~`、转绝对路径、过滤不存在文件）；`AgentClient` 协议同步
+  - 飞书 `_build_user_text` 改为返回 `(user_text, image_paths)`，移除路径文本拼接，单张下载失败降级为 `[图片下载失败: key]` 注释不阻断；`_run_llm_job`/`_stream_to_feishu` 透传 image_paths
+  - 微信 sidecar 拆分 `collectImageItems`(type=2) 与 `collectFileItems`(type=4/5)；新增 `handleImageItems` 静默归档（不发「已收藏」）；`postToCodexClaw`/`handleInbound` 新增 `images` 字段透传
+  - 微信 handler `WeChatTextMessageEvent` 新增 `images` 字段；`_parse_event` 放宽校验（text/files/images 三者有其一即可）；图片-only 消息用兜底文案「用户发送了一张图片。」唤醒模型并传 image_paths
+  - 【二次修复】`pi_stream_read_limit_bytes` 256KB→32MB：pi `--mode json` 会在 `message_start/update/end` 多行回显图片 base64（原图×1.33），大图单行远超 256KB，`asyncio readline` 招 `LimitOverrunError` 被 handler 兜底为「服务繁忙」。同步改 `config.py` 默认值、`conf/.env(.example)`、`test_config.py` 断言
+  - 【三次修复・仅微信】sidecar `decryptMediaBuffer` 支持纯 32 字符 hex 密钥：微信图片 `image_item.aeskey`（顶层）是 16 字节密钥的**纯 hex 字符串**，而旧逻辑只处理文件用的 `base64(hex)`（44 字符）；图片密钥走 base64 解码得 24 字节、再 utf8 回退成 32 字节，触发 `unexpected aes key length: 32`，归档失败→images 为空→webhook 400。新增分支：入参匹配 `/^[0-9a-fA-F]{32}$/` 时直接 hex 解码为 16 字节（纯增量，不影响文件路径）
+- **影响范围**：`core/agent/{pi_cli.py,types.py}`、`channel/feishu/handler.py`、`channel/wechat/handler.py`、`lib/js/wechat-sidecar.mjs`、`app/config.py`、`conf/.env(.example)`、`tests/{test_pi_multimodal.py(新增9),test_handler_single_reply.py,test_wechat_handler.py(+3),test_inbound_file_session.py,test_config.py,wechat-sidecar.test.mjs(+2)}`
+- **验证**：全量 483 passed + Node 19 passed；`pi @img` 冒烟正确识别；重启后经微信 webhook 发 **201KB 大图**（base64≈275KB，超旧 256KB limit、修复前必失败），模型正确识别图片内容、status_code=0、无 LimitOverrunError（飞书侧共用同一 readline 逻辑，limit 提高后同样生效）；微信 hex 密钥修复经新增 Node 单测验证（旧逻辑复现 `key.length=32` 报错、新逻辑得 16 字节），已经真实微信发图端到端确认成功
+- **不改动**：出站路径（微信发图/飞书 post 富文本回复）、文件归档链路（type=4/5）、`push_file` API
+- **教训**：首次验证只用了 128KB 小图（base64 172KB < 256KB 侥幸未超限），未覆盖大图；且微信验证走了直连 webhook（带 images 字段）、**绕过了 sidecar 归档解密段**，漏掉了 hex 密钥 bug。多模态修复必须：①用足够大的真实图片；②走完整真实链路（微信要经 sidecar，不能直连 webhook）
+
 ## 2026-09-15 · rules/AGENTS.md 更名 rules/system.md + 规则缺失告警
 
 - **需求**：消除与根 `AGENTS.md`（开发文档）的撞名。`AGENTS.md` 之名源于 opencode 时代 `{work_dir}/AGENTS.md` 原生加载，opencode 移除后已无用途

@@ -122,13 +122,13 @@ class RecordingWeChatAgent:
         self.session_keys: list[str | None] = []
         self.reset_keys: list[str] = []
 
-    async def chat_stream(self, messages, trace_id: str, *, session_key: str | None = None):
+    async def chat_stream(self, messages, trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None):
         self.calls += 1
         self.messages = messages
         self.session_keys.append(session_key)
         yield "收到"
 
-    async def chat(self, messages, trace_id: str, *, session_key: str | None = None) -> str:
+    async def chat(self, messages, trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None) -> str:
         self.calls += 1
         self.messages = messages
         self.session_keys.append(session_key)
@@ -145,13 +145,13 @@ class RecordingWeChatAgent:
 
 
 class ForbiddenWeChatAgent(RecordingWeChatAgent):
-    async def chat_stream(self, messages, trace_id: str, *, session_key: str | None = None):
+    async def chat_stream(self, messages, trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None):
         self.calls += 1
         raise AssertionError("a file-only message must not wake the backend")
         if False:  # pragma: no cover - keeps this an async generator
             yield ""
 
-    async def chat(self, messages, trace_id: str, *, session_key: str | None = None) -> str:
+    async def chat(self, messages, trace_id: str, *, session_key: str | None = None, image_paths: list[str] | None = None) -> str:
         self.calls += 1
         raise AssertionError("a file-only message must not wake the backend")
 

@@ -16,6 +16,7 @@ const {
   aesEcbPaddedSize,
   buildFileItem,
   collectFileItems,
+  collectImageItems,
   decryptMediaBuffer,
   describeFileItem,
   encryptAesEcb,
@@ -61,6 +62,16 @@ test("buildFileItem aes_key round-trips through the inbound decoder", () => {
   // The inbound path receives aes_key exactly as built here, so this proves the
   // base64-of-hex encoding is symmetric rather than base64 of raw bytes.
   const recovered = decryptMediaBuffer(encryptAesEcb(plaintext, key), item.file_item.media.aes_key, plaintext.length);
+  assert.deepEqual(recovered, plaintext);
+});
+
+test("decryptMediaBuffer decodes a plain 32-char hex key (inbound image aeskey)", () => {
+  const key = crypto.randomBytes(16);
+  const plaintext = crypto.randomBytes(2048);
+  // Inbound image items carry image_item.aeskey as a plain 32-char hex string,
+  // not base64-of-hex like files. Before the fix this threw
+  // "unexpected aes key length: 32" and every inbound image failed to archive.
+  const recovered = decryptMediaBuffer(encryptAesEcb(plaintext, key), key.toString("hex"), plaintext.length);
   assert.deepEqual(recovered, plaintext);
 });
 
@@ -137,7 +148,7 @@ test("resolveSendableFile resolves symlinks and reports size", () => {
   }
 });
 
-test("collectFileItems now includes images", () => {
+test("collectFileItems excludes images, keeps files and videos", () => {
   const msg = {
     item_list: [
       { type: 1, text_item: { text: "看这个" } },
@@ -147,12 +158,31 @@ test("collectFileItems now includes images", () => {
       { type: 5, video_item: {} },
     ],
   };
-  // type 2 used to match neither firstText nor this filter, so images vanished.
-  assert.deepEqual(collectFileItems(msg).map((item) => item.type), [2, 4, 5]);
+  // Images (type 2) are split out so they ride pi's native `@file` multimodal
+  // input instead of the "已收藏" file ack; only files/videos stay here.
+  assert.deepEqual(collectFileItems(msg).map((item) => item.type), [4, 5]);
+});
+
+test("collectImageItems picks out only images", () => {
+  const msg = {
+    item_list: [
+      { type: 1, text_item: { text: "看这个" } },
+      { type: 2, image_item: {} },
+      { type: 3, voice_item: { text: "hi" } },
+      { type: 4, file_item: {} },
+      { type: 2, image_item: {} },
+      { type: 5, video_item: {} },
+    ],
+  };
+  assert.deepEqual(collectImageItems(msg).map((item) => item.type), [2, 2]);
 });
 
 test("collectFileItems tolerates a missing item_list", () => {
   assert.deepEqual(collectFileItems({}), []);
+});
+
+test("collectImageItems tolerates a missing item_list", () => {
+  assert.deepEqual(collectImageItems({}), []);
 });
 
 test("extractFilePayload resolves image_item", () => {

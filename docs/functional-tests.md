@@ -9,7 +9,7 @@
 | # | 功能 | 验证要点 | 验证方式 |
 |---|------|---------|---------|
 | 1 | 飞书发送文件 | 文件下载成功并归档存储到指定目录 | `tests/test_file_archive.py` |
-| 2 | 飞书发送图片 | 图片下载成功并交给 CLI 处理 | `tests/test_feishu_media.py` |
+| 2 | 入站图片多模态 | 飞书图文混排/微信图片下载归档后经 pi `@file` 传给模型（非路径文本）；图片-only 消息能唤醒模型；大图 base64 回显不撑爆 readline limit（32MB）；微信图片 AES 纯 hex 密钥可解密 | `tests/test_pi_multimodal.py`、`tests/test_feishu_media.py`、`tests/test_handler_single_reply.py`、`tests/test_wechat_handler.py`、`tests/wechat-sidecar.test.mjs` + 手动冒烟：两渠道各发一张大图确认模型能描述图片内容 |
 | 3 | 定时任务 `/daily` | 创建 / list / cancel 解析正确；到点执行并推送（飞书 + 微信）；重启后任务恢复 | `tests/test_daily_scheduler.py` |
 | 4 | 定时提醒 `/remind` | 时间解析（s/m/h/d）、到点提醒、持久化恢复 | `tests/test_reminder_scheduler.py` |
 | 5 | 基础对话链路 | 飞书 WS 收文本 → Typing 回执 → 最终答案单条稳定回复 | `tests/test_feishu_ws.py`、`tests/test_handler_single_reply.py` |

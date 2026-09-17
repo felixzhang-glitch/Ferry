@@ -16,6 +16,7 @@
 5. 新配置优先于旧回退；`PI_WORK_DIR` 是最终 cwd，默认与旧配置解析结果保持历史路径，不能多一层或少一层 `/pi`
 6. 定时、记忆、队列、图片发现与推送功能不因后端模块删除而丢失
 7. 取消、重试、熔断与超时分别验证；持续输出时的总超时不能以 idle 超时用例代替
+8. 入站图片经 pi `@file` 多模态传递：`image_paths` 去重/转绝对/过滤不存在，插入 prompt 前；大图 base64 回显不撑爆 readline limit；微信图片纯 hex AES 密钥可解密
 
 ## 要点与用例映射
 
@@ -24,6 +25,7 @@
 | 飞书 WS 与单条回复 | `tests/test_feishu_ws.py`、`tests/test_handler_single_reply.py` | 链路 |
 | 飞书格式化与分段 | `tests/test_feishu_formatting.py` | 单元 |
 | 飞书图片与文件归档 | `tests/test_feishu_media.py`、`tests/test_file_archive.py` | 单元 |
+| pi 多模态图片输入 | `tests/test_pi_multimodal.py`、`tests/test_handler_single_reply.py`、`tests/test_wechat_handler.py`、`tests/wechat-sidecar.test.mjs` | 单元 |
 | 飞书 reaction / 回执 | `tests/test_feishu_reaction.py` | 单元 |
 | 微信消息与鉴权 | `tests/test_wechat_handler.py`、`tests/test_signature_validation.py` | 单元 |
 | 消息解析 | `tests/test_message_parsing.py` | 单元 |

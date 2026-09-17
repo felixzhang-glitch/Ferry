@@ -210,7 +210,7 @@ class FeishuWebhookHandler:
 
     async def _run_llm_job(self, event: Any, session_key: str, trace_id: str) -> None:
         try:
-            user_text = await self._build_user_text(event=event, trace_id=trace_id)
+            user_text, inbound_image_paths = await self._build_user_text(event=event, trace_id=trace_id)
         except FeishuClientError:
             logger.exception(
                 "failed to download received image",
@@ -271,10 +271,14 @@ class FeishuWebhookHandler:
                     already_sent_image_paths=delivered_image_paths,
                     include_recent_generated_images=auto_complete_on_image,
                     session_key=session_key,
+                    image_paths=inbound_image_paths,
                 )
             else:
                 answer = await self._agent_client.chat(
-                    messages=messages, trace_id=trace_id, session_key=session_key
+                    messages=messages,
+                    trace_id=trace_id,
+                    session_key=session_key,
+                    image_paths=inbound_image_paths,
                 )
                 generated_images = []
                 if auto_complete_on_image:
@@ -333,12 +337,16 @@ class FeishuWebhookHandler:
         already_sent_image_paths: list[str] | None = None,
         include_recent_generated_images: bool = False,
         session_key: str | None = None,
+        image_paths: list[str] | None = None,
     ) -> str:
         start = time.monotonic()
         full_text_parts: list[str] = []
 
         async for piece in self._agent_client.chat_stream(
-            messages=messages, trace_id=trace_id, session_key=session_key
+            messages=messages,
+            trace_id=trace_id,
+            session_key=session_key,
+            image_paths=image_paths,
         ):
             full_text_parts.append(piece)
 
@@ -548,25 +556,54 @@ class FeishuWebhookHandler:
         cleaned = cleaned.strip(". ")
         return cleaned
 
-    async def _build_user_text(self, event: Any, trace_id: str) -> str:
+    async def _build_user_text(self, event: Any, trace_id: str) -> tuple[str, list[str]]:
+        """Return (user_text, image_paths) for pi native multimodal input.
+
+        Images are downloaded to local disk and passed to pi via the `@file`
+        positional argument syntax, so the model receives them as real vision
+        input instead of a text hint. Text stays as-is; when there's no text
+        but there are images, a fallback caption keeps the prompt non-empty.
+        """
         text = str(getattr(event, "text", "") or "").strip()
         image_keys = self._event_image_keys(event)
         if not image_keys:
-            return text
+            return text, []
 
-        image_paths = []
+        image_paths: list[str] = []
+        failed_keys: list[str] = []
         for image_key in image_keys:
-            image_paths.append(
-                await self._download_received_image(
-                    message_id=event.message_id,
-                    image_key=image_key,
-                    trace_id=trace_id,
+            try:
+                image_paths.append(
+                    await self._download_received_image(
+                        message_id=event.message_id,
+                        image_key=image_key,
+                        trace_id=trace_id,
+                    )
                 )
-            )
-        image_refs = "\n".join(f"- {image_path}" for image_path in image_paths)
+            except FeishuClientError:
+                logger.warning(
+                    "failed to download one image, continuing with the rest",
+                    extra={
+                        "trace_id": trace_id,
+                        "event": "feishu.image_download_partial",
+                        "image_key": image_key,
+                    },
+                )
+                failed_keys.append(image_key)
+
+        notes: list[str] = []
+        if failed_keys:
+            notes.append("[图片下载失败: " + ", ".join(failed_keys) + "]")
         if text:
-            return f"{text}\n\n[Feishu images saved locally]\n{image_refs}"
-        return f"用户发送了一张图片。\n\n[Feishu images saved locally]\n{image_refs}"
+            user_text = "\n\n".join([text, *notes]) if notes else text
+        elif image_paths:
+            user_text = "用户发送了一张图片。"
+            if notes:
+                user_text = f"{user_text}\n\n{notes[0]}"
+        else:
+            # All images failed to download and there was no text.
+            user_text = "\n\n".join(["用户发送了一张图片。", *notes])
+        return user_text, image_paths
 
     @staticmethod
     def _event_image_keys(event: Any) -> list[str]:

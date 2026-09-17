@@ -5,6 +5,8 @@ __pycache__/
 /.env
 /conf/.env
 /conf/wechat/account.json
+# sync_pi_models 每次改模型生成的时间戳备份，不入库
+conf/pi/models.json.bak.*
 /.notion-pages.json
 *.log
 *.pid

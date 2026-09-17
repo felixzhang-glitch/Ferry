@@ -47,6 +47,7 @@ class WeChatTextMessageEvent:
     text: str
     context_token: str = ""
     files: tuple[WeChatFileAttachment, ...] = ()
+    images: tuple[str, ...] = ()
 
 
 class WeChatWebhookHandler:
@@ -102,7 +103,9 @@ class WeChatWebhookHandler:
             # The sidecar already replied 已收藏, and a file-only message must not
             # wake the agent or it will read the file unprompted. When text
             # accompanies the files, fall through and let the notices ride it.
-            if not event.text:
+            # Images are the exception: they ride pi's native `@file` multimodal
+            # input, so an image-only message must still wake the model.
+            if not event.text and not event.images:
                 return []
 
         if normalized_text == "/stop":
@@ -186,20 +189,32 @@ class WeChatWebhookHandler:
 
         # Drain only once the turn is committed, so a rejected turn keeps the
         # notices queued for the next one.
-        user_text = apply_pending_notices(event.text, self._sessions.take_pending_files(session_key))
+        base_text = event.text.strip()
+        if not base_text and event.images:
+            # An image-only turn still needs a non-empty prompt; the images
+            # themselves ride the native `@file` multimodal args below.
+            base_text = "用户发送了一张图片。"
+        user_text = apply_pending_notices(base_text, self._sessions.take_pending_files(session_key))
         messages = [{"role": "user", "content": user_text}]
+        image_paths = list(event.images)
 
         try:
             if self._settings.streaming_enabled:
                 parts: list[str] = []
                 async for piece in self._agent_client.chat_stream(
-                    messages=messages, trace_id=trace_id, session_key=session_key
+                    messages=messages,
+                    trace_id=trace_id,
+                    session_key=session_key,
+                    image_paths=image_paths,
                 ):
                     parts.append(piece)
                 answer = "".join(parts).strip()
             else:
                 answer = await self._agent_client.chat(
-                    messages=messages, trace_id=trace_id, session_key=session_key
+                    messages=messages,
+                    trace_id=trace_id,
+                    session_key=session_key,
+                    image_paths=image_paths,
                 )
 
             if not answer.strip():
@@ -261,6 +276,30 @@ class WeChatWebhookHandler:
         return tuple(attachments)
 
     @staticmethod
+    def _parse_images(payload: dict[str, Any]) -> tuple[str, ...]:
+        """Extract absolute image paths forwarded by the sidecar.
+
+        Images ride pi's native `@file` multimodal input, so only the path
+        matters here; name/size are informational and dropped.
+        """
+        raw_images = payload.get("images")
+        if not isinstance(raw_images, list):
+            return ()
+
+        paths: list[str] = []
+        seen: set[str] = set()
+        for entry in raw_images:
+            if isinstance(entry, dict):
+                path = str(entry.get("path") or "").strip()
+            else:
+                path = str(entry or "").strip()
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            paths.append(path)
+        return tuple(paths)
+
+    @staticmethod
     def _parse_event(payload: dict[str, Any]) -> WeChatTextMessageEvent:
         message_id = str(payload.get("message_id", "") or payload.get("client_id", "")).strip()
         account_id = str(payload.get("account_id", "")).strip()
@@ -268,10 +307,11 @@ class WeChatWebhookHandler:
         text = str(payload.get("text", "")).strip()
         context_token = str(payload.get("context_token", "")).strip()
         files = WeChatWebhookHandler._parse_files(payload)
+        images = WeChatWebhookHandler._parse_images(payload)
 
         if not message_id or not account_id or not user_id:
             raise HTTPException(status_code=400, detail="missing wechat message identity")
-        if not text and not files:
+        if not text and not files and not images:
             raise HTTPException(status_code=400, detail="missing wechat text")
 
         return WeChatTextMessageEvent(
@@ -281,6 +321,7 @@ class WeChatWebhookHandler:
             text=text,
             context_token=context_token,
             files=files,
+            images=images,
         )
 
     @staticmethod

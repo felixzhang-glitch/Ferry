@@ -33,7 +33,7 @@ def test_defaults_preserve_existing_pi_sessions_and_images():
     assert settings.pi_work_dir == "./runtime/codex-workdir/pi"
     assert settings.generated_images_dir == "~/.codex/generated_images"
     assert settings.pi_cli_bin == "pi"
-    assert settings.pi_stream_read_limit_bytes == 262144
+    assert settings.pi_stream_read_limit_bytes == 33554432
     assert settings.pi_max_retries == 2
     assert settings.pi_retry_backoff_seconds == 1.0
     assert settings.pi_circuit_breaker_threshold == 5
