@@ -10,7 +10,7 @@
 
 ### 常用命令
 
-- 运行：`./bin/start`（首次启动引导配置飞书凭证）、`./bin/server start|stop|restart|status`
+- 运行：`./bin/server start`（首次启动引导配置飞书凭证）、`./bin/server stop|restart|status`
 - 测试：`cd conf && pytest -q`（配置在 `conf/pytest.ini`，pythonpath 指向 `lib/python`）
 - 依赖安装：`pip install -r conf/requirements.txt`
 

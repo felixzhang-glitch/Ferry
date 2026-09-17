@@ -17,6 +17,7 @@ PYTHONPATH_DIR="$ROOT_DIR/lib/python"
 WECHAT_SIDECAR="$ROOT_DIR/lib/js/wechat-sidecar.mjs"
 WECHAT_ACCOUNT_PATH_DEFAULT="$CONF_DIR/wechat/account.json"
 WECHAT_SYNC_BUF_PATH_DEFAULT="$ROOT_DIR/runtime/wechat/get_updates_buf.txt"
+SUPERVISOR_GROUP="codeclaw-stack"
 
 usage() {
   cat <<'USAGE'
@@ -32,8 +33,7 @@ Usage:
   ./bin/server help                      Show this help
 
 Tips:
-  ./bin/start         -> ./bin/server start
-  ./bin/start -f      -> ./bin/server start -f
+  若项目由 supervisor 托管，start/stop/restart/status 会自动提示使用 supervisorctl
 USAGE
 }
 
@@ -205,6 +205,24 @@ ensure_prerequisites() {
   fi
 }
 
+# 检测 supervisor 是否接管了 codeclaw-stack 进程组（无论程序处于何种状态）
+is_supervisor_managed() {
+  command -v supervisorctl >/dev/null 2>&1 || return 1
+  supervisorctl status "${SUPERVISOR_GROUP}:*" >/dev/null 2>&1
+}
+
+print_supervisor_hint() {
+  cat <<HINT
+[SUPERVISOR] codeClaw 已由 supervisor 托管（进程组: ${SUPERVISOR_GROUP}），请使用 supervisorctl 管理：
+
+  supervisorctl status  ${SUPERVISOR_GROUP}:*           查看全部状态
+  supervisorctl start   ${SUPERVISOR_GROUP}:*           启动全部
+  supervisorctl stop    ${SUPERVISOR_GROUP}:*           停止全部
+  supervisorctl restart ${SUPERVISOR_GROUP}:*           重启全部
+  supervisorctl restart ${SUPERVISOR_GROUP}:codeclaw    仅重启主服务（代码/.env 变更后）
+HINT
+}
+
 pid_is_running() {
   local pid_file="$1"
   if [[ ! -f "$pid_file" ]]; then
@@ -351,6 +369,7 @@ main() {
   local cmd="${1:-start}"
   case "$cmd" in
     start)
+      is_supervisor_managed && { print_supervisor_hint; exit 0; }
       shift || true
       local foreground=0
       if [[ "${1:-}" == "-f" || "${1:-}" == "--foreground" ]]; then
@@ -362,10 +381,12 @@ main() {
       fi
       ;;
     stop)
+      is_supervisor_managed && { print_supervisor_hint; exit 0; }
       stop_pid "WeChat sidecar" "$WECHAT_PID_FILE"
       stop_pid "codeClaw" "$APP_PID_FILE"
       ;;
     restart)
+      is_supervisor_managed && { print_supervisor_hint; exit 0; }
       shift || true
       local foreground=0
       if [[ "${1:-}" == "-f" || "${1:-}" == "--foreground" ]]; then
@@ -379,6 +400,11 @@ main() {
       fi
       ;;
     status)
+      if is_supervisor_managed; then
+        echo "[SUPERVISOR] codeClaw 由 supervisor 托管（进程组: ${SUPERVISOR_GROUP}）"
+        supervisorctl status "${SUPERVISOR_GROUP}:*"
+        exit 0
+      fi
       status_one "codeClaw" "$APP_PID_FILE" "$APP_LOG_FILE"
       status_one "WeChat sidecar" "$WECHAT_PID_FILE" "$WECHAT_LOG_FILE"
       ;;
@@ -389,12 +415,18 @@ main() {
           wechat_login
           ;;
         start)
+          is_supervisor_managed && { print_supervisor_hint; exit 0; }
           start_wechat_sidecar 1
           ;;
         stop)
+          is_supervisor_managed && { print_supervisor_hint; exit 0; }
           stop_pid "WeChat sidecar" "$WECHAT_PID_FILE"
           ;;
         status)
+          if is_supervisor_managed; then
+            supervisorctl status "${SUPERVISOR_GROUP}:wechat-sidecar"
+            exit 0
+          fi
           status_one "WeChat sidecar" "$WECHAT_PID_FILE" "$WECHAT_LOG_FILE"
           ;;
         *)

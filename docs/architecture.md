@@ -65,7 +65,7 @@ codeClaw/
 
 ## 状态与部署
 
-- 单实例 Uvicorn 进程，服务管理入口 `./bin/start` 与 `./bin/server`
+- 单实例 Uvicorn 进程，服务管理入口 `./bin/server`
 - 仅依赖 pi agent CLI；不再检查或启动其它 agent CLI
 - `PI_WORK_DIR` 是最终 cwd，默认 `./runtime/codex-workdir/pi`；保留旧路径名称是为了兼容会话，不表示仍支持旧后端
 - pi 映射默认 `runtime/server/pi-sessions.json`，pi transcript 默认在 `~/.pi/agent/sessions/` 下按 cwd 组织

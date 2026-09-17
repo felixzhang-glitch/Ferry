@@ -11,6 +11,15 @@
       },
       "models": [
         {
+          "id": "qwen3.8-flash",
+          "name": "Qwen3.8 Flash (百炼)",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 1000000,
+          "maxTokens": 16384,
+          "compat": { "thinkingFormat": "qwen" }
+        },
+        {
           "id": "deepseek-v4.1-flash",
           "name": "DeepSeek V4.1 Flash (百炼)",
           "reasoning": true,

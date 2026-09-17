@@ -86,7 +86,7 @@ python3 -m venv .venv
 编辑 `conf/.env`，填写飞书凭证 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，确认 `PI_CLI_BIN`、`PI_MODEL` 及模型服务凭证。候选模型在 `conf/pi/models.json`，启动时自动同步到 `~/.pi/agent/models.json`
 
 ```bash
-./bin/start
+./bin/server start
 ./bin/server status
 ```
 
@@ -99,7 +99,7 @@ python3 -m venv .venv
 
 ### Supervisor 托管
 
-生产部署走 Supervisor 时，不要混用 `./bin/server start|restart`，避免重复拉起进程
+生产部署走 Supervisor 时，`./bin/server` 会自动检测并提示使用 supervisorctl，无需手动区分
 
 ```bash
 supervisorctl status
