@@ -691,7 +691,7 @@ class PiCliClient:
         return "\n".join(lines)
 
     def _get_or_create_session_id(self, session_key: str | None) -> tuple[str | None, bool]:
-        """pi accepts an unknown `--session-id` and creates it, so codeClaw owns
+        """pi accepts an unknown `--session-id` and creates it, so Ferry owns
         the ID instead of parsing one out of the stream."""
         if not session_key:
             return None, True

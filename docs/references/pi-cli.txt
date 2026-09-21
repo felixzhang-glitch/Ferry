@@ -1,6 +1,6 @@
 # pi CLI 参考
 
-pi（Pi Coding Agent，https://pi.dev）是 codeClaw 的唯一后端。下文协议行为基于既有 0.84.2 验证记录；2026-09-11 用本机 `pi --version`、`pi --help` 核对版本与参数，未重新请求真实模型或渠道
+pi（Pi Coding Agent，https://pi.dev）是 Ferry 的唯一后端。下文协议行为基于既有 0.84.2 验证记录；2026-09-11 用本机 `pi --version`、`pi --help` 核对版本与参数，未重新请求真实模型或渠道
 
 ## 基本用法
 
@@ -11,10 +11,10 @@ pi
 # 非交互纯文本，处理完即退出
 pi -p "列出 src 下的 ts 文件"
 
-# 非交互 JSONL 事件流（codeClaw 使用；不需要额外加 -p）
+# 非交互 JSONL 事件流（Ferry 使用；不需要额外加 -p）
 pi --mode json "<prompt>"
 
-# 常驻双向 RPC（codeClaw 暂未使用）
+# 常驻双向 RPC（Ferry 暂未使用）
 pi --mode rpc
 
 # 指定模型（provider/model-id，可带 :thinking 后缀）
@@ -27,7 +27,7 @@ pi --session <path|id> "<prompt>"
 pi --fork <path|id> "<prompt>"
 pi --no-session "<prompt>"
 
-# 指定精确会话 ID，不存在则以该 ID 新建（codeClaw 使用）
+# 指定精确会话 ID，不存在则以该 ID 新建（Ferry 使用）
 pi --session-id <id> "<prompt>"
 
 # 追加系统提示，可多次；值可以是文本，也可以是文件路径（读取文件内容）
@@ -53,7 +53,7 @@ pi --version
 pi list / pi install <source> / pi remove <source> / pi update [source|self]
 ```
 
-## codeClaw 集成方式
+## Ferry 集成方式
 
 ```bash
 pi --mode json --session-id <id> [--model <provider/model>] \
@@ -65,10 +65,10 @@ pi --mode json --session-id <id> [--model <provider/model>] \
    --approve <prompt>
 ```
 
-| 参数 | codeClaw 的用法 |
+| 参数 | Ferry 的用法 |
 |------|-----------------|
 | `--mode json` | 输出 JSONL 事件流，逐行读 stdout |
-| `--session-id` | 会话 ID **由 codeClaw 生成**（uuid4 hex），按渠道会话 key 持久化后复用 |
+| `--session-id` | 会话 ID **由 Ferry 生成**（uuid4 hex），按渠道会话 key 持久化后复用 |
 | `--append-system-prompt` | 规则、长期记忆与时钟的每轮注入通道。值可以是文件路径（读内容），也可以是直接给的文本——时间走文本，每轮进程新生成一次 |
 | `--approve` | 非交互模式不弹信任提示，默认按 `defaultProjectTrust: ask` **忽略**项目级资源，需显式信任 |
 | `--tools` | 留空不传。它是 allowlist，传了会把扩展工具一起排除 |
@@ -158,13 +158,13 @@ pi 不内置百炼 provider，需在 `~/.pi/agent/models.json` 注册（模板�
   是为了把隐式默认变显式，IM 回复场景够用，同时钉住压缩摘要的输出预算。
   两个字段未填时用 pi 默认 128000 / 16384，填错会让自动压缩过早或过晚触发。
 - 验证注册结果：`PI_OFFLINE=1 pi --list-models bailian`。models.json 在每次打开 `/model` 时重载，
-  改完不用重启 pi（但 codeClaw 侧改 `.env` 需要重启服务）。
+  改完不用重启 pi（但 Ferry 侧改 `.env` 需要重启服务）。
 
 ## 推理强度 reasoning_effort
 
 pi 的 `--thinking <level>` 对 openai-completions provider 会转成请求体的 `reasoning_effort`，
 前提是 models.json 里 `compat.supportsReasoningEffort: true`（为 `false` 时 pi 会把该参数剥掉）。
-codeClaw 侧由 `PI_THINKING` 控制，默认 `high`，经 [pi_cli.py](../../lib/python/core/agent/pi_cli.py) 的 `--thinking` 下发。
+Ferry 侧由 `PI_THINKING` 控制，默认 `high`，经 [pi_cli.py](../../lib/python/core/agent/pi_cli.py) 的 `--thinking` 下发。
 
 百炼文档原文：
 
@@ -178,7 +178,7 @@ codeClaw 侧由 `PI_THINKING` 控制，默认 `high`，经 [pi_cli.py](../../lib
 
 ## 上下文自动压缩
 
-压缩由 pi 自己承担（`core/compaction`），codeClaw 零参与。参数写在 `~/.pi/agent/settings.json`，
+压缩由 pi 自己承担（`core/compaction`），Ferry 零参与。参数写在 `~/.pi/agent/settings.json`，
 仓内模板 `conf/pi/settings.json.example`：
 
 ```json
@@ -198,11 +198,11 @@ codeClaw 侧由 `PI_THINKING` 控制，默认 `high`，经 [pi_cli.py](../../lib
   生成摘要（能与上一次摘要迭代合并）；切点只落在 user/assistant 消息，不切断 tool result。
 - 摘要调用的输出上限是 `min(0.8 × reserveTokens, maxTokens)`，即 `min(160000, 16384) = 16384`。
 - 两个触发点都在 `AgentSession` 核心里，与运行模式无关，`--mode json` 同样生效：
-  `agent_end` 之后；以及发新 prompt 之前（pre-prompt check，对 codeClaw 每轮新进程恢复会话的
+  `agent_end` 之后；以及发新 prompt 之前（pre-prompt check，对 Ferry 每轮新进程恢复会话的
   模式尤其重要）。另有 overflow 分支：LLM 报上下文溢出时先压缩再自动重试。
 - 历史实测：微信主会话在 128K 窗口时以 111,616 为阈值，2026-08-07（tokensBefore=112641）与
   2026-08-14（111738）各触发一次，阈值公式已被真实数据验证。
-- codeClaw 的 `/compact`、`/compress` 仅提示上下文由 pi 原生管理，不执行压缩，也不伪报成功。
+- Ferry 的 `/compact`、`/compress` 仅提示上下文由 pi 原生管理，不执行压缩，也不伪报成功。
   `SessionManager` 已无 rounds 或手工摘要；需要新上下文时用 `/new`、`/reset`，清附件通知与
   session_key → pi ID 映射，下轮创建新会话，pi 侧旧 transcript 保留。`/backend`、`/pi` 只读状态。
 - 注入的 system prompt（`--append-system-prompt` 的 rules + memory + 时钟，约 5.5KB）**不参与压缩**，
@@ -229,7 +229,7 @@ agent_end        willRetry=false（为 true 时不是真结束）
 agent_settled    真正结束标志
 ```
 
-codeClaw 侧的三条解析规则：
+Ferry 侧的三条解析规则：
 
 1. 只取 `message_update.assistantMessageEvent.text_delta` 的 `delta` 直接输出，
    `thinking_delta` / `toolcall_delta` 一律丢弃，思考不进回复。

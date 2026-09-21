@@ -2,16 +2,16 @@
 
 ## pi-native
 
-codeClaw 只接入 pi。判断标准：**pi 原生支持的能力，桥接层不重复实现**
+Ferry 只接入 pi。判断标准：**pi 原生支持的能力，桥接层不重复实现**
 
 - **会话记忆**：`PiCliClient` 维护会话 key → pi session ID 映射，pi 原生 `--session-id` 负责持久化；两渠道每轮只发当前 user 消息
 - **上下文压缩**：pi 原生管理，不再维护 FIFO 历史或手工摘要；`/compact`、`/compress` 只给说明，不假装完成压缩
-- **工具调用**：文件操作、代码执行等由 pi 承担，codeClaw 不封装工具执行框架
+- **工具调用**：文件操作、代码执行等由 pi 承担，Ferry 不封装工具执行框架
 - **规则、记忆与时间**：复用 `--append-system-prompt` 每轮注入，时间不拼进 user transcript；skills 发现与摘要归 `app.skills`
 
 ## 桥接不膨胀
 
-codeClaw 的职责：
+Ferry 的职责：
 
 - 消息收发与渠道适配：飞书 WS / Webhook、微信 Sidecar、格式化、分段、图片与文件
 - 会话 key、附件通知、去重、消息队列与任务取消

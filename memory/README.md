@@ -1,6 +1,6 @@
 # memory/ — 长期记忆目录
 
-codeClaw 的长期记忆存放处，每个类别一个 markdown 文件（basic / health / preference / work / finance / recent），
+Ferry 的长期记忆存放处，每个类别一个 markdown 文件（basic / health / preference / work / finance / recent），
 由 `MEMORY_CATEGORIES` 配置决定。
 
 - **本目录只有此 README 入主仓**：类别文件包含隐私，被 `.gitignore` 排除，永不推送

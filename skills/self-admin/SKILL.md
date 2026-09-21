@@ -1,6 +1,6 @@
 # Self Admin
 
-查询 codeClaw 服务状态、重启服务、查看日志的操作指引。
+查询 Ferry 服务状态、重启服务、查看日志的操作指引。
 
 ## 使用场景
 
@@ -10,4 +10,4 @@
 
 - 状态：告知用户执行 `./bin/server status`
 - 重启：告知用户执行 `./bin/server restart`
-- 日志：告知用户查看 `logs/codexclaw.log`
+- 日志：告知用户查看 `logs/ferry.log`

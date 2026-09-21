@@ -272,7 +272,7 @@ async def test_feishu_message_reaches_pi_and_reply_flows_back(tmp_path) -> None:
     assert kwargs["stdin"] == asyncio.subprocess.DEVNULL
     assert kwargs["start_new_session"] is True
 
-    # codeClaw owns the session id, so it is on disk before pi ever confirms it.
+    # Ferry owns the session id, so it is on disk before pi ever confirms it.
     session_id = command[command.index("--session-id") + 1]
     with open(settings.pi_session_store_path, encoding="utf-8") as fh:
         assert list(json.load(fh).values()) == [session_id]

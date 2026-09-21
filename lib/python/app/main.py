@@ -30,7 +30,7 @@ settings = get_settings()
 setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="codeClaw", version="0.8.0")
+app = FastAPI(title="Ferry", version="0.8.0")
 
 session_manager = SessionManager()
 deduplicator = MessageDeduplicator(ttl_seconds=settings.deduplicate_ttl_seconds)

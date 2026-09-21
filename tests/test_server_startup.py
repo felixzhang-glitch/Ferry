@@ -235,7 +235,7 @@ def test_load_env_does_not_hide_parser_failure(sandbox):
 def test_control_paths_and_runner_python_are_unchanged(sandbox):
     result = run_helpers(sandbox, 'printf "%s\\n" "$APP_PID_FILE" "$APP_LOG_FILE"')
     assert result.returncode == 0
-    assert result.stdout.splitlines() == [str(ROOT / "runtime/server/codexclaw.pid"), str(ROOT / "logs/codexclaw.log")]
+    assert result.stdout.splitlines() == [str(ROOT / "runtime/server/ferry.pid"), str(ROOT / "logs/ferry.log")]
     runner = RUN_APP.read_text()
     assert ".opencode" not in runner
     assert "/root/.local/bin" in runner

@@ -6,7 +6,7 @@
 
 pi 是唯一后端。飞书与微信每轮只向 `PiCliClient` 传当前 `user` 消息，不拼接历史、不缓存 assistant 回复。pi 的 `--session-id` 接受调用方生成的 ID，不存在时按该 ID 新建；映射由 `PiCliClient` 管理，历史持久化与上下文压缩由 pi 管理
 
-- 会话 ID 映射：飞书 `user_id:chat_id`、微信 `wechat:account_id:user_id` -> codeClaw 生成的 uuid4 hex
+- 会话 ID 映射：飞书 `user_id:chat_id`、微信 `wechat:account_id:user_id` -> Ferry 生成的 uuid4 hex
 - 持久化：`PI_SESSION_STORE_PATH`，默认 `runtime/server/pi-sessions.json`
 - pi 侧会话文件：默认 `~/.pi/agent/sessions/` 下按 cwd 分目录的 JSONL 树；设置 `PI_CODING_AGENT_DIR` 时使用对应 agent 目录
 - `/new`、`/reset`：清附件通知并删除映射，下轮自然生成新 uuid（旧会话在 pi 侧保留）

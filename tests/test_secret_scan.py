@@ -17,7 +17,7 @@ SCANNER_PATH = REPO_ROOT / ".qoder" / "hooks" / "secret_scan.py"
 
 
 def _load_scanner():
-    spec = importlib.util.spec_from_file_location("codeclaw_secret_scan", SCANNER_PATH)
+    spec = importlib.util.spec_from_file_location("ferry_secret_scan", SCANNER_PATH)
     assert spec and spec.loader, f"无法加载 {SCANNER_PATH}"
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -71,7 +71,7 @@ PRIVATE_KEY_HEADER = "-----BEGIN" + " RSA PRIVATE KEY" + "-----"
         (f'accessKeySecret: "{ALI_SK}"', "alibaba-access-key-secret"),
         (f"secret_id = {TENCENT_AK}", "tencent-secret-id"),
         (f'OPENAI_API_KEY="{OPENAI_KEY}"', "openai-style-api-key"),
-        (f"DASHSCOPE_API_KEY={DASHSCOPE_KEY}", "codeclaw-env-secret"),
+        (f"DASHSCOPE_API_KEY={DASHSCOPE_KEY}", "ferry-env-secret"),
         (f'x = "{ANTHROPIC_KEY}"', "anthropic-api-key"),
         (f"key = {GOOGLE_KEY}", "google-api-key"),
         (f"url = https://x@github.com with {GITHUB_TOKEN}", "github-token"),
@@ -104,7 +104,7 @@ def test_project_env_secrets_reported_without_entropy_gate() -> None:
         "WECHAT_WEBHOOK_TOKEN=Wb3NmPdKt5RgYc2L",
         "CODEX_API_KEY=NmPdKt5RgYc2LsJf",
     ):
-        assert "codeclaw-env-secret" in rules_hit(line), line
+        assert "ferry-env-secret" in rules_hit(line), line
 
 
 @pytest.mark.parametrize(
@@ -126,7 +126,7 @@ def test_project_env_secrets_reported_without_entropy_gate() -> None:
         'token = "abcdef1234567890abcdef"',
         'secret_key = "aaaaaaaaaaaaaaaaaaaaaa"',
         'api_key = "my-service-api-key-name"',
-        'path_token = "/data/app/codeClaw/runtime"',
+        'path_token = "/data/app/Ferry/runtime"',
         'version_token = "1.2.3-beta.20240101"',
     ],
 )
@@ -140,7 +140,7 @@ def test_same_value_reported_once_per_line() -> None:
     assert len(findings) == 1
 
     env_findings = scan.scan_text("conf/.env", f"DASHSCOPE_API_KEY={DASHSCOPE_KEY}")
-    assert [f.rule for f in env_findings] == ["codeclaw-env-secret"]
+    assert [f.rule for f in env_findings] == ["ferry-env-secret"]
 
 
 def test_inline_ignore_comment_suppresses_finding() -> None:
@@ -154,7 +154,7 @@ def test_skipped_paths_and_dangerous_paths() -> None:
     assert scan.path_is_skipped("package-lock.json")
     assert scan.path_is_skipped("bun.lock")
     assert scan.path_is_skipped("runtime/server/backend.json")
-    assert scan.path_is_skipped("logs/codexclaw.log")
+    assert scan.path_is_skipped("logs/ferry.log")
     assert not scan.path_is_skipped("lib/python/app/config.py")
 
     assert scan.dangerous_path_reason("conf/.env")

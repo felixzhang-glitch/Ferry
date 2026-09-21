@@ -1,10 +1,10 @@
-# codeClaw
+# Ferry
 
 把飞书和微信的消息，交给同一个 pi
 
-> 能力归 pi，编排归 codeClaw。不造智能，只做消息收发、渠道适配与进程管理
+> 能力归 pi，编排归 Ferry。不造智能，只做消息收发、渠道适配与进程管理
 
-codeClaw 是一个个人 IM 桥接服务。飞书和微信的消息进来，经过去重、排队、命令分发，交给唯一的后端 pi 处理；pi 的回复再按渠道各自格式化送回去。会话历史、上下文压缩、工具调用全部留在 pi 原生层，桥接层一份都不重复实现
+Ferry 是一个个人 IM 桥接服务。飞书和微信的消息进来，经过去重、排队、命令分发，交给唯一的后端 pi 处理；pi 的回复再按渠道各自格式化送回去。会话历史、上下文压缩、工具调用全部留在 pi 原生层，桥接层一份都不重复实现
 
 ## 设计哲学
 
@@ -23,7 +23,7 @@ flowchart LR
         WX["微信<br/>iLink Sidecar (Node.js)"]
     end
 
-    subgraph claw["codeClaw (Python / FastAPI)"]
+    subgraph claw["Ferry (Python / FastAPI)"]
         IN["入口层<br/>事件解析 · 签名校验"]
         CORE["业务层<br/>去重 · 命令分发 · FIFO 队列 · 附件通知"]
         CLI["PiCliClient<br/>流式 · 重试 · 熔断 · 取消"]
@@ -48,7 +48,7 @@ flowchart LR
 sequenceDiagram
     participant U as 用户
     participant C as 渠道 (飞书/微信)
-    participant B as codeClaw
+    participant B as Ferry
     participant P as pi CLI
 
     U->>C: 发消息
@@ -103,7 +103,7 @@ python3 -m venv .venv
 
 ```bash
 supervisorctl status
-supervisorctl restart 'codeclaw-stack:*'
+supervisorctl restart 'ferry-stack:*'
 curl --fail http://127.0.0.1:8080/healthz
 ```
 

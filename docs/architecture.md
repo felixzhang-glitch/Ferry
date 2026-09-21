@@ -45,7 +45,7 @@ graph TB
 ## 目录结构
 
 ```
-codeClaw/
+Ferry/
 ├── bin/                        # 服务控制脚本
 ├── conf/                       # 配置模板、模型注册表、依赖、pytest 配置
 ├── lib/

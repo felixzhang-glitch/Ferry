@@ -149,7 +149,7 @@ def _count_entries(text: str) -> int:
 
 
 def _skeleton(category: str) -> str:
-    hint = _CATEGORY_HINTS.get(category, "由 codeClaw 在用户明确要求时写入。")
+    hint = _CATEGORY_HINTS.get(category, "由 Ferry 在用户明确要求时写入。")
     return f"# {label(category)}\n\n<!-- {hint} 条目格式: - [YYYY-MM-DD] 内容 -->\n"
 
 

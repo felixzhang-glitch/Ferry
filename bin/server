@@ -9,21 +9,21 @@ ENV_FILE="$CONF_DIR/.env"
 ENV_EXAMPLE_FILE="$CONF_DIR/.env.example"
 LOG_DIR="$ROOT_DIR/logs"
 RUNTIME_DIR="$ROOT_DIR/runtime/server"
-APP_PID_FILE="$RUNTIME_DIR/codexclaw.pid"
+APP_PID_FILE="$RUNTIME_DIR/ferry.pid"
 WECHAT_PID_FILE="$RUNTIME_DIR/wechat-sidecar.pid"
-APP_LOG_FILE="$LOG_DIR/codexclaw.log"
+APP_LOG_FILE="$LOG_DIR/ferry.log"
 WECHAT_LOG_FILE="$LOG_DIR/wechat-sidecar.log"
 PYTHONPATH_DIR="$ROOT_DIR/lib/python"
 WECHAT_SIDECAR="$ROOT_DIR/lib/js/wechat-sidecar.mjs"
 WECHAT_ACCOUNT_PATH_DEFAULT="$CONF_DIR/wechat/account.json"
 WECHAT_SYNC_BUF_PATH_DEFAULT="$ROOT_DIR/runtime/wechat/get_updates_buf.txt"
-SUPERVISOR_GROUP="codeclaw-stack"
+SUPERVISOR_GROUP="ferry-stack"
 
 usage() {
   cat <<'USAGE'
 Usage:
-  ./bin/server start [-f|--foreground]   Start codeClaw and WeChat sidecar when logged in
-  ./bin/server stop                      Stop codeClaw and WeChat sidecar
+  ./bin/server start [-f|--foreground]   Start Ferry and WeChat sidecar when logged in
+  ./bin/server stop                      Stop Ferry and WeChat sidecar
   ./bin/server restart [-f|--foreground] Restart services
   ./bin/server status                    Show service status
   ./bin/server wx login                  Scan QR code to login or refresh WeChat ClawBot
@@ -205,7 +205,7 @@ ensure_prerequisites() {
   fi
 }
 
-# 检测 supervisor 是否接管了 codeclaw-stack 进程组（无论程序处于何种状态）
+# 检测 supervisor 是否接管了 ferry-stack 进程组（无论程序处于何种状态）
 is_supervisor_managed() {
   command -v supervisorctl >/dev/null 2>&1 || return 1
   supervisorctl status "${SUPERVISOR_GROUP}:*" >/dev/null 2>&1
@@ -213,13 +213,13 @@ is_supervisor_managed() {
 
 print_supervisor_hint() {
   cat <<HINT
-[SUPERVISOR] codeClaw 已由 supervisor 托管（进程组: ${SUPERVISOR_GROUP}），请使用 supervisorctl 管理：
+[SUPERVISOR] Ferry 已由 supervisor 托管（进程组: ${SUPERVISOR_GROUP}），请使用 supervisorctl 管理：
 
   supervisorctl status  ${SUPERVISOR_GROUP}:*           查看全部状态
   supervisorctl start   ${SUPERVISOR_GROUP}:*           启动全部
   supervisorctl stop    ${SUPERVISOR_GROUP}:*           停止全部
   supervisorctl restart ${SUPERVISOR_GROUP}:*           重启全部
-  supervisorctl restart ${SUPERVISOR_GROUP}:codeclaw    仅重启主服务（代码/.env 变更后）
+  supervisorctl restart ${SUPERVISOR_GROUP}:ferry    仅重启主服务（代码/.env 变更后）
 HINT
 }
 
@@ -271,7 +271,7 @@ start_app() {
   sync_pi_models || echo "[WARN] pi models.json 同步失败，继续启动"
 
   if pid_is_running "$APP_PID_FILE"; then
-    echo "[INFO] codeClaw 已在运行，PID=$(cat "$APP_PID_FILE")"
+    echo "[INFO] Ferry 已在运行，PID=$(cat "$APP_PID_FILE")"
     return 0
   fi
   rm -f "$APP_PID_FILE"
@@ -285,20 +285,20 @@ start_app() {
   local cmd=(python -m uvicorn app.main:app --host "$host" --port "$port")
   if [[ "$foreground" == "1" ]]; then
     start_wechat_sidecar 0 || true
-    echo "[INFO] 前台启动 codeClaw: ${cmd[*]}"
+    echo "[INFO] 前台启动 Ferry: ${cmd[*]}"
     exec "${cmd[@]}"
   fi
 
-  echo "[INFO] 后台启动 codeClaw..."
+  echo "[INFO] 后台启动 Ferry..."
   setsid nohup "${cmd[@]}" >>"$APP_LOG_FILE" 2>&1 < /dev/null &
   local pid=$!
   echo "$pid" > "$APP_PID_FILE"
   sleep 1
   if kill -0 "$pid" 2>/dev/null; then
-    echo "[INFO] codeClaw 启动成功，PID=$pid"
+    echo "[INFO] Ferry 启动成功，PID=$pid"
     echo "[INFO] 日志文件: $APP_LOG_FILE"
   else
-    echo "[ERROR] codeClaw 启动失败，请检查日志: $APP_LOG_FILE"
+    echo "[ERROR] Ferry 启动失败，请检查日志: $APP_LOG_FILE"
     tail -n 50 "$APP_LOG_FILE" 2>/dev/null || true
     rm -f "$APP_PID_FILE"
     exit 1
@@ -383,7 +383,7 @@ main() {
     stop)
       is_supervisor_managed && { print_supervisor_hint; exit 0; }
       stop_pid "WeChat sidecar" "$WECHAT_PID_FILE"
-      stop_pid "codeClaw" "$APP_PID_FILE"
+      stop_pid "Ferry" "$APP_PID_FILE"
       ;;
     restart)
       is_supervisor_managed && { print_supervisor_hint; exit 0; }
@@ -393,7 +393,7 @@ main() {
         foreground=1
       fi
       stop_pid "WeChat sidecar" "$WECHAT_PID_FILE"
-      stop_pid "codeClaw" "$APP_PID_FILE"
+      stop_pid "Ferry" "$APP_PID_FILE"
       start_app "$foreground"
       if [[ "$foreground" != "1" ]]; then
         start_wechat_sidecar 0 || true
@@ -401,11 +401,11 @@ main() {
       ;;
     status)
       if is_supervisor_managed; then
-        echo "[SUPERVISOR] codeClaw 由 supervisor 托管（进程组: ${SUPERVISOR_GROUP}）"
+        echo "[SUPERVISOR] Ferry 由 supervisor 托管（进程组: ${SUPERVISOR_GROUP}）"
         supervisorctl status "${SUPERVISOR_GROUP}:*"
         exit 0
       fi
-      status_one "codeClaw" "$APP_PID_FILE" "$APP_LOG_FILE"
+      status_one "Ferry" "$APP_PID_FILE" "$APP_LOG_FILE"
       status_one "WeChat sidecar" "$WECHAT_PID_FILE" "$WECHAT_LOG_FILE"
       ;;
     wx)

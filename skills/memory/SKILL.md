@@ -1,11 +1,11 @@
 ---
 name: memory
-description: Long-term memory operations for codeClaw. Use this skill when the user explicitly asks to remember, update, review or forget a personal fact (记住 / 记一下 / 存下来 / 以后都 / 别忘了 / 看下我的记忆 / 把某条删了). Memory lives as markdown files under the project's memory/ directory, one file per configured category, and is injected into every turn's context. Never record facts the user merely mentioned in passing.
+description: Long-term memory operations for Ferry. Use this skill when the user explicitly asks to remember, update, review or forget a personal fact (记住 / 记一下 / 存下来 / 以后都 / 别忘了 / 看下我的记忆 / 把某条删了). Memory lives as markdown files under the project's memory/ directory, one file per configured category, and is injected into every turn's context. Never record facts the user merely mentioned in passing.
 ---
 
 # memory
 
-codeClaw 的长期记忆。记忆内容保存在项目根 `memory/` 目录，每个类别一个 markdown 文件，
+Ferry 的长期记忆。记忆内容保存在项目根 `memory/` 目录，每个类别一个 markdown 文件，
 由 `MEMORY_CATEGORIES` 配置决定，常驻类别每轮自动注入上下文。
 
 ## 何时使用

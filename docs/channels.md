@@ -18,7 +18,7 @@ lark-oapi SDK (WebSocket 长连接) → FeishuWsClient → FeishuWebhookHandler.
 
 **配置步骤**：
 1. 确保 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 已配置
-2. 启动 codeClaw 服务，SDK 自动建立长连接
+2. 启动 Ferry 服务，SDK 自动建立长连接
 3. 登录[开发者后台](https://open.feishu.cn/app) → 事件与回调 → 事件配置
 4. 编辑订阅方式，选择「使用长连接接收事件」并保存
 5. 添加事件 `im.message.receive_v1`（接收消息 v2.0）
@@ -83,7 +83,7 @@ iLink Bot API ← 长轮询 ← wechat-sidecar.mjs (Node.js)
 ### 关键实现
 
 - **Sidecar 模式**：wechat-sidecar.mjs 独立进程，负责扫码登录、长轮询、发送消息
-- **共享 Token**：sidecar 与 codeClaw 间通过 `WECHAT_WEBHOOK_TOKEN` 做简单鉴权
+- **共享 Token**：sidecar 与 Ferry 间通过 `WECHAT_WEBHOOK_TOKEN` 做简单鉴权
 - **消息类型**：入站 私聊文本 + 语音转文字 + 图片/文件/视频归档（`item_list[].type` 2/4/5）；出站 文本 + 文件
 - **限制**：出站暂不支持图片/视频/语音、typing 回执、长任务通知、定时提醒通知
 
@@ -111,7 +111,7 @@ lib/python/channel/wechat/handler.py → webhook 处理
 
 ## 出站文件统一入口
 
-两个渠道都由 codeClaw 主服务的 `POST /push/file` 统一收口，agent 只需学一个接口：
+两个渠道都由 Ferry 主服务的 `POST /push/file` 统一收口，agent 只需学一个接口：
 
 ```bash
 curl -X POST http://127.0.0.1:8080/push/file \
@@ -139,7 +139,7 @@ curl -X POST http://127.0.0.1:8080/push/file \
         → 用户下一次开口时，通知注入该轮 user 文本
 ```
 
-**为什么注入下一轮**：pi 只接收当前 user 消息，历史保存在 pi 原生 session 中。codeClaw 只维护 key 与附件通知，不另存对话副本；搭载下一轮 user 文本才能把附件路径送到 pi
+**为什么注入下一轮**：pi 只接收当前 user 消息，历史保存在 pi 原生 session 中。Ferry 只维护 key 与附件通知，不另存对话副本；搭载下一轮 user 文本才能把附件路径送到 pi
 
 **为什么到达时不唤醒 agent**：唤醒就意味着 agent 会去读文件。用户发个文件存档，不该被自动展开分析一遍（4MB PDF 白烧一次配额）。通知头部已写明「仅当本轮确实需要时才读取」
 
