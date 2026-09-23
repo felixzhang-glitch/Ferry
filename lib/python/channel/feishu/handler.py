@@ -68,6 +68,9 @@ class FeishuWebhookHandler:
         self._daily_scheduler = daily_scheduler
         self._message_queue = message_queue or SessionMessageQueue(max_pending=10)
         self._downloaded_image_paths: list[str] = []
+        # trace_id -> message_id of an in-flight streaming card, so the error /
+        # cancel paths can overwrite the partial card instead of posting anew.
+        self._active_stream_cards: dict[str, str] = {}
 
     async def handle_event(self, event: FeishuTextMessageEvent) -> None:
         """Entry point for SDK long-connection mode (no verification needed)."""
@@ -301,25 +304,26 @@ class FeishuWebhookHandler:
 
         except AgentClientCancelled:
             if auto_complete_on_image and delivered_image_paths:
+                self._active_stream_cards.pop(trace_id, None)
                 logger.info(
                     "image generation completed before pi final response",
                     extra={"trace_id": trace_id, "event": "pipeline.image_auto_complete"},
                 )
                 return
             logger.info("message cancelled by user", extra={"trace_id": trace_id, "event": "pipeline.cancel"})
-            await self._safe_reply(
+            await self._finalize_or_reply(
+                trace_id=trace_id,
                 message_id=event.message_id,
                 chat_id=event.chat_id,
                 text="当前任务已终止。",
-                trace_id=trace_id,
             )
         except Exception:
             logger.exception("failed to process message", extra={"trace_id": trace_id, "event": "pipeline.error"})
-            await self._safe_reply(
+            await self._finalize_or_reply(
+                trace_id=trace_id,
                 message_id=event.message_id,
                 chat_id=event.chat_id,
                 text="服务繁忙，请稍后重试。",
-                trace_id=trace_id,
             )
         finally:
             if image_watch_task is not None:
@@ -342,13 +346,86 @@ class FeishuWebhookHandler:
         start = time.monotonic()
         full_text_parts: list[str] = []
 
+        streaming = getattr(self._settings, "feishu_streaming_edit_enabled", False)
+        min_interval = getattr(self._settings, "feishu_stream_min_interval_seconds", 0.7)
+        min_chars = getattr(self._settings, "feishu_stream_min_chars", 40)
+        card_message_id: str | None = None
+        stream_broken = False
+        last_update = 0.0
+        last_len = 0
+        last_rendered = ""
+        update_count = 0
+        body = ""
+        footer: str | None = None
+        placeholder = "> 🌿 正在处理…"
+
+        async def render(*, force: bool) -> None:
+            """Push body + footer into the card, creating it on first render.
+
+            `force` bypasses the interval/char throttle. Tool progress and the
+            final text have to land even when the answer itself has not grown,
+            otherwise the card freezes for the whole length of a tool call.
+            """
+            nonlocal card_message_id, stream_broken
+            nonlocal last_update, last_len, last_rendered, update_count
+            if not streaming or stream_broken:
+                return
+            hint = footer if footer is not None else ("" if body else placeholder)
+            text = "\n\n".join(part for part in (body, hint) if part)
+            if not text or text == last_rendered:
+                return
+            now = time.monotonic()
+            if card_message_id is not None and not force:
+                if (now - last_update) < min_interval or (len(body) - last_len) < min_chars:
+                    return
+            try:
+                if card_message_id is None:
+                    card_message_id = await self._feishu_client.reply_markdown(
+                        message_id=message_id,
+                        markdown=text,
+                        trace_id=trace_id,
+                        request_uuid=f"{message_id}-stream",
+                    )
+                    if card_message_id is None:
+                        # No message_id returned -> cannot update; fall back at the end.
+                        stream_broken = True
+                        return
+                    self._active_stream_cards[trace_id] = card_message_id
+                else:
+                    await self._feishu_client.update_markdown_card(
+                        message_id=card_message_id,
+                        markdown=text,
+                        trace_id=trace_id,
+                    )
+            except FeishuClientError:
+                stream_broken = True
+                logger.warning(
+                    "feishu streaming update failed, falling back to single reply",
+                    extra={"trace_id": trace_id, "event": "feishu.stream_fallback"},
+                )
+                return
+            last_update, last_len, last_rendered = now, len(body), text
+            update_count += 1
+
+        async def on_progress(label: str | None) -> None:
+            nonlocal footer
+            footer = f"> 🔧 {label}" if label else None
+            await render(force=True)
+
+        # The card exists before the first token: on tool-heavy turns most of the
+        # wall time passes before pi emits any text at all (measured median 77%).
+        await render(force=True)
+
         async for piece in self._agent_client.chat_stream(
             messages=messages,
             trace_id=trace_id,
             session_key=session_key,
             image_paths=image_paths,
+            on_progress=on_progress if streaming else None,
         ):
             full_text_parts.append(piece)
+            body = normalize_reply_text("".join(full_text_parts))
+            await render(force=False)
 
         answer = "".join(full_text_parts).strip()
         already_sent = already_sent_image_paths or []
@@ -366,15 +443,40 @@ class FeishuWebhookHandler:
             else:
                 answer = "(空响应)"
 
-        await self._safe_reply_with_images(
-            message_id=message_id,
-            chat_id=chat_id,
-            text=answer,
-            trace_id=trace_id,
-            request_uuid=f"{message_id}-final",
-            extra_image_paths=generated_images,
-            already_sent_image_paths=already_sent,
-        )
+        # Finalize the card with the clean, complete text when streaming held up.
+        if streaming and card_message_id is not None and not stream_broken:
+            has_images = bool(extract_local_image_paths(answer)) or bool(generated_images)
+            final_text = remove_local_image_references(answer) if has_images else answer
+            final_text = normalize_reply_text(final_text)
+            if not final_text:
+                final_text = "(见下图)" if has_images else "(空响应)"
+            body, footer = final_text, None
+            await render(force=True)
+
+        streamed_ok = streaming and card_message_id is not None and not stream_broken
+        if streamed_ok:
+            # Text already lives in the card; only deliver images (if any) as follow-ups.
+            await self._safe_reply_with_images(
+                message_id=message_id,
+                chat_id=chat_id,
+                text=answer,
+                trace_id=trace_id,
+                request_uuid=f"{message_id}-stream-img",
+                extra_image_paths=generated_images,
+                already_sent_image_paths=already_sent,
+                send_text=False,
+            )
+        else:
+            # Streaming disabled or broken: deliver the full answer as one message.
+            await self._safe_reply_with_images(
+                message_id=message_id,
+                chat_id=chat_id,
+                text=answer,
+                trace_id=trace_id,
+                request_uuid=f"{message_id}-final",
+                extra_image_paths=generated_images,
+                already_sent_image_paths=already_sent,
+            )
 
         logger.info(
             "streaming response finished",
@@ -382,8 +484,11 @@ class FeishuWebhookHandler:
                 "trace_id": trace_id,
                 "event": "pipeline.streaming",
                 "duration_ms": int((time.monotonic() - start) * 1000),
+                "feishu_stream_updates": update_count,
+                "feishu_streamed": streamed_ok,
             },
         )
+        self._active_stream_cards.pop(trace_id, None)
         return answer
 
     async def _handle_stop_command(self, message_id: str, chat_id: str, session_key: str, trace_id: str) -> None:
@@ -667,6 +772,7 @@ class FeishuWebhookHandler:
         request_uuid: str | None = None,
         extra_image_paths: list[str] | None = None,
         already_sent_image_paths: list[str] | None = None,
+        send_text: bool = True,
     ) -> None:
         image_paths = self._merge_image_paths(extract_local_image_paths(text), extra_image_paths or [])
         shared_sent_paths = already_sent_image_paths
@@ -674,7 +780,7 @@ class FeishuWebhookHandler:
         image_paths_to_send = [path for path in image_paths if path not in already_sent]
         text_without_images = remove_local_image_references(text) if image_paths else text
 
-        if normalize_reply_text(text_without_images):
+        if send_text and normalize_reply_text(text_without_images):
             await self._safe_reply(
                 message_id=message_id,
                 chat_id=chat_id,
@@ -712,7 +818,7 @@ class FeishuWebhookHandler:
                     request_uuid=f"{image_uuid}-failed",
                 )
 
-        if not image_paths and not normalize_reply_text(text_without_images):
+        if send_text and not image_paths and not normalize_reply_text(text_without_images):
             await self._safe_reply(
                 message_id=message_id,
                 chat_id=chat_id,
@@ -851,6 +957,38 @@ class FeishuWebhookHandler:
             except OSError:
                 pass
         self._downloaded_image_paths.clear()
+
+    async def _finalize_or_reply(
+        self,
+        trace_id: str,
+        message_id: str,
+        chat_id: str,
+        text: str,
+    ) -> None:
+        """Overwrite the in-flight streaming card with `text` when one exists,
+        so a mid-stream failure/cancel replaces the partial output instead of
+        leaving it visible and appending a second message. Falls back to a
+        normal reply when there is no card or the update fails."""
+        card_id = self._active_stream_cards.pop(trace_id, None)
+        if card_id is not None:
+            try:
+                await self._feishu_client.update_markdown_card(
+                    message_id=card_id,
+                    markdown=text,
+                    trace_id=trace_id,
+                )
+                return
+            except FeishuClientError:
+                logger.warning(
+                    "failed to overwrite streaming card, falling back to reply",
+                    extra={"trace_id": trace_id, "event": "feishu.stream_finalize_fallback"},
+                )
+        await self._safe_reply(
+            message_id=message_id,
+            chat_id=chat_id,
+            text=text,
+            trace_id=trace_id,
+        )
 
     async def _safe_reply(
         self,

@@ -12,6 +12,14 @@ pi 是唯一后端。飞书与微信每轮只向 `PiCliClient` 传当前 `user` 
 - `/new`、`/reset`：清附件通知并删除映射，下轮自然生成新 uuid（旧会话在 pi 侧保留）
 - 首轮判定：靠“映射是否新建”而不是“session_id 是否为空”，skills 摘要只在首轮注入
 
+### 常驻运行时
+
+开启 `PI_PERSISTENT_ENABLED` 时只复用 Node/SDK 运行时，不跨请求保留 AgentSession；每轮从同一原生 JSONL 创建新 session，并重新加载规则、AGENTS.md、技能、记忆和当前时间。模型与工具逻辑仍由 pi 管理，不维护另一份桥接历史
+
+worker 池默认 2 个，每个 worker 独占一轮，同一原生 session ID 额外串行保护。成功收到 `ferry_done` 才归还池；取消、超时、协议错误或崩溃回收该 worker 进程组，后续请求自动补建。`/stop` 也能取消等待 worker 的请求。服务启动预热，关闭时回收全部 worker；首次冷启动、故障后的补建仍需要加载 Node/SDK
+
+`PI_PERSISTENT_ENABLED=false` 并重启回到 CLI 模式；映射、cwd 和 pi transcript 无需转换。部署参数和观测字段见 [architecture.md](architecture.md)
+
 ### 桥接层状态与命令
 
 `SessionManager` 仅管理渠道会话 key 和 `pending_files`，不保存历史、独立桥接 UUID，也不手工压缩。pi session ID 不等于被删除的桥接层 UUID

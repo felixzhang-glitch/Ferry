@@ -16,7 +16,8 @@ from app import memory
 from app.clock import time_context
 from app.config import Settings
 from app.skills import build_skill_summary
-from core.agent.types import AgentClientCancelled, AgentClientError
+from core.agent.types import AgentClientCancelled, AgentClientError, ProgressCallback
+from core.agent.pi_worker import PiWorkerLease, PiWorkerPool
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,10 @@ _PROJECT_ROOT = os.path.abspath(
 
 
 class PiCliClient:
-    """Backend client for the `pi` coding agent (`pi --mode json`).
+    """Backend client for pi's native JSON events, via SDK workers or CLI.
 
-    Owns native session IDs, subprocess lifecycle, retries and event parsing.
+    Owns native session IDs, worker/CLI lifecycle, retries and event parsing.
+    Persistent mode leases a preloaded Node worker; CLI mode remains a rollback.
     Channels use this client directly; conversation history stays in pi.
 
     * `message_update.assistantMessageEvent.text_delta` carries real deltas.
@@ -58,6 +60,7 @@ class PiCliClient:
         self._tools = settings.pi_tools.strip()
         self._agent_dir = settings.pi_agent_dir.strip()
         self._api_key = settings.pi_api_key.strip()
+        self._deepseek_api_key = settings.pi_deepseek_api_key.strip()
         self._offline = settings.pi_offline
         self._approve_project = settings.pi_approve_project
         self._timeout_seconds = (
@@ -74,8 +77,11 @@ class PiCliClient:
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
         self._stream_piece_chars = 80
-        self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+        self._active_processes: dict[str, asyncio.subprocess.Process | PiWorkerLease] = {}
+        self._pending_spawns: dict[str, asyncio.Task] = {}
         self._cancel_requests: set[str] = set()
+        self._worker_pool: PiWorkerPool | None = None
+        self._closed = False
 
         self._work_dir = os.path.abspath(os.path.expanduser(settings.pi_work_dir))
         os.makedirs(self._work_dir, exist_ok=True)
@@ -88,11 +94,24 @@ class PiCliClient:
     def name(self) -> str:
         return self._name
 
+    async def start(self) -> None:
+        """Preload pi before channels and schedulers start accepting messages."""
+        pool = self._get_worker_pool()
+        if pool is not None:
+            await pool.warmup()
+
     async def close(self) -> None:
+        self._closed = True
         with self._process_lock:
             processes = list(self._active_processes.items())
-            self._cancel_requests.update(trace_id for trace_id, _ in processes)
+            pending = list(self._pending_spawns.items())
+            self._cancel_requests.update(trace_id for trace_id, _ in processes + pending)
+        for _, task in pending:
+            task.cancel()
+        await asyncio.gather(*(task for _, task in pending), return_exceptions=True)
         await asyncio.gather(*(self._terminate_process(process) for _, process in processes))
+        if self._worker_pool is not None:
+            await self._worker_pool.close()
 
     def reset_session(self, session_key: str) -> None:
         with self._session_lock:
@@ -181,6 +200,7 @@ class PiCliClient:
         *,
         session_key: str | None = None,
         image_paths: list[str] | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> AsyncIterator[str]:
         self._assert_circuit_closed()
 
@@ -197,17 +217,20 @@ class PiCliClient:
                 emitted = False
                 preview_parts: list[str] = []
                 try:
-                    async for piece in self._run_stream_once(
+                    stream = self._run_stream_once(
                         prompt=prompt,
                         trace_id=trace_id,
                         session_id=session_id,
                         session_holder=session_holder,
                         image_paths=resolved_images,
-                    ):
-                        emitted = True
-                        if len("".join(preview_parts)) < 240:
-                            preview_parts.append(piece)
-                        yield piece
+                        on_progress=on_progress,
+                    )
+                    async with contextlib.aclosing(stream):
+                        async for piece in stream:
+                            emitted = True
+                            if len("".join(preview_parts)) < 240:
+                                preview_parts.append(piece)
+                            yield piece
 
                     self._record_success()
                     self._persist_session(session_key, session_holder, expected_id=session_id)
@@ -286,11 +309,14 @@ class PiCliClient:
     def cancel(self, trace_id: str) -> bool:
         with self._process_lock:
             process = self._active_processes.get(trace_id)
-            if process is None:
+            pending = self._pending_spawns.get(trace_id)
+            if process is None and pending is None:
                 return False
             self._cancel_requests.add(trace_id)
 
-        if process.returncode is None:
+        if pending is not None:
+            pending.get_loop().call_soon_threadsafe(pending.cancel)
+        if process is not None and process.returncode is None:
             self._kill_process_group(process)
         return True
 
@@ -302,17 +328,37 @@ class PiCliClient:
         session_id: str | None = None,
         session_holder: dict[str, str] | None = None,
         image_paths: list[str] | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> AsyncIterator[str]:
         command = self._build_command(session_id=session_id, image_paths=image_paths)
         command.append(prompt)
-        process = await self._spawn_process(command)
-        self._register_process(trace_id, process)
+        if self._closed:
+            raise AgentClientError("pi client is closed")
+        spawn_task = asyncio.create_task(self._spawn_process(command))
+        with self._process_lock:
+            self._pending_spawns[trace_id] = spawn_task
+        try:
+            process = await spawn_task
+            self._register_process(trace_id, process)
+        except asyncio.CancelledError:
+            # Cancellation can arrive after spawn produced a process but before
+            # this coroutine resumed to register it. Do not leak that process.
+            if spawn_task.done() and not spawn_task.cancelled():
+                with contextlib.suppress(Exception):
+                    await self._terminate_process(spawn_task.result())
+            self._raise_if_cancelled(trace_id)
+            raise
+        finally:
+            with self._process_lock:
+                self._pending_spawns.pop(trace_id, None)
         stderr_task = asyncio.create_task(self._read_stream_text(process.stderr))
-        deadline = time.monotonic() + self._timeout_seconds
+        turn_start = time.monotonic()
+        deadline = turn_start + self._timeout_seconds
 
         error_messages: list[str] = []
         fallback_parts: list[str] = []
         final_text = ""
+        tool_started_at: dict[str, float] = {}
         # Decided by the *last* assistant message_end: pi can fail an attempt,
         # auto-retry and then succeed, so an intermediate error is not the
         # verdict for the turn.
@@ -323,9 +369,8 @@ class PiCliClient:
         try:
             while True:
                 self._raise_if_cancelled(trace_id)
-                line = await asyncio.wait_for(
-                    self._readline_with_idle_timeout(process.stdout),
-                    timeout=max(0.0, deadline - time.monotonic()),
+                line = await self._readline_with_idle_timeout(
+                    process.stdout, remaining=max(0.0, deadline - time.monotonic()),
                 )
                 if not line:
                     break
@@ -358,6 +403,43 @@ class PiCliClient:
                     if error_message:
                         error_messages.append(error_message)
 
+                tool_event = self._tool_execution(event)
+                if tool_event is not None:
+                    phase, call_id, tool_name, detail, is_error = tool_event
+                    elapsed_ms = int((time.monotonic() - turn_start) * 1000)
+                    if phase == "start":
+                        tool_started_at[call_id] = time.monotonic()
+                        logger.info(
+                            "pi tool call",
+                            extra={
+                                "trace_id": trace_id,
+                                "event": "pi.tool_call",
+                                "backend": self._name,
+                                "tool": tool_name,
+                                "tool_detail": self._truncate(detail, 160),
+                                "elapsed_ms": elapsed_ms,
+                            },
+                        )
+                        label = f"{tool_name} · {detail}" if detail else tool_name
+                        await self._emit_progress(on_progress, self._truncate(label, 140), trace_id)
+                    else:
+                        started_at = tool_started_at.pop(call_id, None)
+                        logger.info(
+                            "pi tool finished",
+                            extra={
+                                "trace_id": trace_id,
+                                "event": "pi.tool_result",
+                                "backend": self._name,
+                                "tool": tool_name,
+                                "is_error": is_error,
+                                "duration_ms": (
+                                    int((time.monotonic() - started_at) * 1000) if started_at else None
+                                ),
+                                "elapsed_ms": elapsed_ms,
+                            },
+                        )
+                        await self._emit_progress(on_progress, None, trace_id)
+
                 delta = self._extract_text_delta(event)
                 if delta:
                     emitted_text = True
@@ -372,6 +454,12 @@ class PiCliClient:
         except asyncio.TimeoutError as exc:
             self._raise_if_cancelled(trace_id)
             raise AgentClientError(f"{self._name} cli timeout") from exc
+        except AgentClientError:
+            self._raise_if_cancelled(trace_id)
+            raise
+        except (OSError, ValueError) as exc:
+            self._raise_if_cancelled(trace_id)
+            raise AgentClientError(f"{self._name} transport read failed") from exc
         finally:
             # Also reap the process on task cancellation or a closed stream.
             try:
@@ -435,14 +523,16 @@ class PiCliClient:
         image_paths: list[str] | None = None,
     ) -> str:
         parts: list[str] = []
-        async for piece in self._run_stream_once(
+        stream = self._run_stream_once(
             prompt=prompt,
             trace_id=trace_id,
             session_id=session_id,
             session_holder=session_holder,
             image_paths=image_paths,
-        ):
-            parts.append(piece)
+        )
+        async with contextlib.aclosing(stream):
+            async for piece in stream:
+                parts.append(piece)
         return "".join(parts).strip()
 
     def _build_command(
@@ -464,7 +554,7 @@ class PiCliClient:
         # The clock rides the system channel, not the prompt: pi persists user
         # text into its own transcript, so a prompt-inline timestamp left one
         # stale copy per turn (327 in the WeChat session) for the model to pick
-        # from. System prompt text is per-process, never persisted, never compacted.
+        # from. System text is rebuilt per turn, never persisted or compacted.
         command.extend(["--append-system-prompt", time_context()])
         if self._approve_project:
             command.append("--approve")
@@ -511,14 +601,64 @@ class PiCliClient:
             logger.warning("failed to build memory context", extra={"event": "memory.context_build"})
             return None
 
-    async def _spawn_process(self, command: list[str]) -> asyncio.subprocess.Process:
+    def _process_env(self) -> dict[str, str]:
         env = os.environ.copy()
         if self._api_key:
             env["DASHSCOPE_API_KEY"] = self._api_key
+        if self._deepseek_api_key:
+            env["DEEPSEEK_API_KEY"] = self._deepseek_api_key
         if self._offline:
             env["PI_OFFLINE"] = "1"
         if self._agent_dir:
             env["PI_CODING_AGENT_DIR"] = self._agent_dir
+        return env
+
+    def _get_worker_pool(self) -> PiWorkerPool | None:
+        if not getattr(self._settings, "pi_persistent_enabled", False):
+            return None
+        if self._closed:
+            raise AgentClientError("pi client is closed")
+        if self._worker_pool is None:
+            sdk = self._settings.pi_sdk_module.strip()
+            if not sdk or not os.path.isabs(sdk) or not os.path.isfile(sdk):
+                raise AgentClientError("PI_SDK_MODULE must name the installed pi dist/index.js")
+            self._worker_pool = PiWorkerPool(
+                node_bin=self._settings.pi_node_bin,
+                sdk_module=sdk,
+                size=self._settings.pi_worker_pool_size,
+                startup_timeout=self._settings.pi_worker_startup_timeout_seconds,
+                cwd=self._work_dir, env=self._process_env(),
+                read_limit=self._settings.pi_stream_read_limit_bytes,
+            )
+        return self._worker_pool
+
+    def _refresh_worker_system_args(self, command: list[str]) -> list[str]:
+        # A pool lease may wait minutes behind another chat. Rebuild dynamic
+        # system input after acquisition, not at the time it joined the queue.
+        system_args = []
+        for value in [*self._system_prompt_files(), time_context()]:
+            system_args.extend(["--append-system-prompt", value])
+        refreshed = []
+        inserted = False
+        args = iter(command[1:-1])  # Never interpret the user's final prompt.
+        for arg in args:
+            if arg == "--append-system-prompt":
+                next(args)
+                if not inserted:
+                    refreshed.extend(system_args)
+                    inserted = True
+            else:
+                refreshed.append(arg)
+        if not inserted:
+            refreshed.extend(system_args)
+        refreshed.append(command[-1])
+        return refreshed
+
+    async def _spawn_process(self, command: list[str]) -> asyncio.subprocess.Process | PiWorkerLease:
+        pool = self._get_worker_pool()
+        if pool is not None:
+            return await pool.run(command[1:], prepare=lambda: self._refresh_worker_system_args(command))
+        env = self._process_env()
         return await asyncio.create_subprocess_exec(
             *command,
             cwd=self._work_dir,
@@ -533,10 +673,24 @@ class PiCliClient:
             start_new_session=True,
         )
 
-    async def _readline_with_idle_timeout(self, stream: asyncio.StreamReader | None) -> bytes:
+    async def _readline_with_idle_timeout(self, stream, *, remaining: float | None = None) -> bytes:
         if stream is None:
             return b""
-        return await asyncio.wait_for(stream.readline(), timeout=self._idle_timeout_seconds)
+        timeout = self._idle_timeout_seconds
+        if remaining is not None:
+            timeout = min(timeout, remaining)
+        read = asyncio.create_task(stream.readline())
+        try:
+            # Python 3.10 wait_for can swallow an external cancellation when
+            # its inner read finishes in the same loop tick. wait does not.
+            done, _ = await asyncio.wait({read}, timeout=timeout)
+            if not done:
+                raise asyncio.TimeoutError
+            return read.result()
+        finally:
+            if not read.done():
+                read.cancel()
+            await asyncio.gather(read, return_exceptions=True)
 
     async def _read_stream_text(self, stream: asyncio.StreamReader | None) -> str:
         if stream is None:
@@ -546,21 +700,29 @@ class PiCliClient:
             return ""
         return data.decode("utf-8", errors="replace")
 
-    async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
+    async def _terminate_process(self, process: asyncio.subprocess.Process | PiWorkerLease) -> None:
+        if isinstance(process, PiWorkerLease):
+            await process.close()
+            return
         if process.returncode is not None:
             return
         self._kill_process_group(process)
         await process.wait()
 
     @staticmethod
-    def _kill_process_group(process: asyncio.subprocess.Process) -> None:
+    def _kill_process_group(process: asyncio.subprocess.Process | PiWorkerLease) -> None:
+        if isinstance(process, PiWorkerLease):
+            process.kill()
+            return
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             with contextlib.suppress(ProcessLookupError):
                 process.kill()
 
-    def _register_process(self, trace_id: str, process: asyncio.subprocess.Process) -> None:
+    def _register_process(self, trace_id: str, process: asyncio.subprocess.Process | PiWorkerLease) -> None:
+        if isinstance(process, PiWorkerLease):
+            process.trace_id = trace_id
         with self._process_lock:
             self._active_processes[trace_id] = process
 
@@ -598,6 +760,57 @@ class PiCliClient:
             return ""
         delta = inner.get("delta")
         return delta if isinstance(delta, str) else ""
+
+    @staticmethod
+    def _tool_execution(event: dict[str, Any]) -> tuple[str, str, str, str, bool] | None:
+        """Decode pi's `tool_execution_start` / `tool_execution_end` events.
+
+        Returns (phase, call_id, tool_name, detail, is_error). `detail` is the
+        single argument worth showing a user: a bash command, a path, a query.
+        """
+        event_type = event.get("type")
+        if event_type == "tool_execution_start":
+            phase = "start"
+        elif event_type == "tool_execution_end":
+            phase = "end"
+        else:
+            return None
+
+        name = event.get("toolName")
+        if not isinstance(name, str) or not name:
+            return None
+        call_id = event.get("toolCallId")
+        detail = ""
+        args = event.get("args")
+        if isinstance(args, dict):
+            for key in ("command", "path", "pattern", "url", "query"):
+                value = args.get(key)
+                if isinstance(value, str) and value:
+                    detail = value
+                    break
+        return (
+            phase,
+            call_id if isinstance(call_id, str) and call_id else name,
+            name,
+            detail,
+            bool(event.get("isError")),
+        )
+
+    @staticmethod
+    async def _emit_progress(
+        on_progress: ProgressCallback | None, label: str | None, trace_id: str
+    ) -> None:
+        """A progress hint must never take down the turn it describes."""
+        if on_progress is None:
+            return
+        try:
+            await on_progress(label)
+        except Exception:
+            logger.warning(
+                "progress callback failed",
+                extra={"trace_id": trace_id, "event": "pi.progress_error"},
+                exc_info=True,
+            )
 
     @staticmethod
     def _assistant_message(event: dict[str, Any]) -> dict[str, Any] | None:

@@ -5,6 +5,7 @@
 - pytest 单元 / 链路测试为主，pi JSONL 与飞书 / 微信 API 使用 mock；进程取消另用本地 Python 子进程验证；真实链路单独手动冒烟
 - 运行：项目根执行 `pytest -c conf/pytest.ini -q`，或 `cd conf && pytest -q`
 - Node sidecar：项目根执行 `node --test tests/wechat-sidecar.test.mjs`
+- `tests/` 为本地目录，不随仓库分发（已 `git rm --cached` + `.gitignore`）：下文的文件映射只对本地工作副本有效，clone 仓库拿不到这些测试
 - 以下是回归目标和文件映射；本次执行记录见 [需求变更记录](requirement-changes.md)。真实模型和渠道实发需单独冒烟，不能由 mock 测试替代
 
 ## 测试要点

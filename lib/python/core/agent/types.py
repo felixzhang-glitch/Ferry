@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Protocol
 
 
@@ -10,6 +10,12 @@ class AgentClientError(RuntimeError):
 
 class AgentClientCancelled(AgentClientError):
     """The user cancelled the current request."""
+
+
+# Called with a short label while pi runs a tool, and with None once that tool
+# settles. Channels use it to show progress during the silent stretch before the
+# first text delta; implementations must not raise into the agent loop.
+ProgressCallback = Callable[[str | None], Awaitable[None]]
 
 
 class AgentClient(Protocol):
@@ -31,6 +37,7 @@ class AgentClient(Protocol):
         *,
         session_key: str | None = None,
         image_paths: list[str] | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> AsyncIterator[str]: ...
 
     def cancel(self, trace_id: str) -> bool: ...

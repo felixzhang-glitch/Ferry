@@ -101,16 +101,27 @@ class Settings(BaseSettings):
     )
 
     pi_cli_bin: str = Field(default="pi", validation_alias="PI_CLI_BIN")
+    # Opt in after configuring Node and the installed pi SDK entry.
+    # false retains the original CLI transport for operational rollback.
+    pi_persistent_enabled: bool = Field(default=False, validation_alias="PI_PERSISTENT_ENABLED")
+    pi_node_bin: str = Field(default="node", validation_alias="PI_NODE_BIN")
+    pi_sdk_module: str = Field(default="", validation_alias="PI_SDK_MODULE")
+    pi_worker_pool_size: int = Field(default=2, ge=1, le=8, validation_alias="PI_WORKER_POOL_SIZE")
+    pi_worker_startup_timeout_seconds: float = Field(
+        default=30.0, gt=0, validation_alias="PI_WORKER_STARTUP_TIMEOUT_SECONDS",
+    )
     pi_model: str = Field(default="", validation_alias="PI_MODEL")
     # pi resolves "$DASHSCOPE_API_KEY" from models.json at request time, so the
     # key travels as an environment variable rather than a CLI argument.
     pi_api_key: str = Field(default="", validation_alias="DASHSCOPE_API_KEY")
+    # Same resolution for the DeepSeek official endpoint (provider "deepseek").
+    pi_deepseek_api_key: str = Field(default="", validation_alias="DEEPSEEK_API_KEY")
     pi_thinking: str = Field(default="high", validation_alias="PI_THINKING")
     pi_tools: str = Field(default="", validation_alias="PI_TOOLS")
     pi_agent_dir: str = Field(default="", validation_alias="PI_CODING_AGENT_DIR")
     pi_offline: bool = Field(default=True, validation_alias="PI_OFFLINE")
     pi_approve_project: bool = Field(default=True, validation_alias="PI_APPROVE_PROJECT")
-    pi_timeout_seconds: float = Field(default=300.0, validation_alias="PI_TIMEOUT_SECONDS")
+    pi_timeout_seconds: float = Field(default=180.0, validation_alias="PI_TIMEOUT_SECONDS")
     pi_idle_timeout_seconds: float = Field(default=120.0, validation_alias="PI_IDLE_TIMEOUT_SECONDS")
     pi_session_store_path: str = Field(
         default="./runtime/server/pi-sessions.json",
@@ -118,6 +129,15 @@ class Settings(BaseSettings):
     )
 
     streaming_enabled: bool = Field(default=True, validation_alias="STREAMING_ENABLED")
+    # Feishu-only: progressively edit an interactive card as pi streams tokens.
+    # WeChat is unaffected. Disable to restore the single buffered reply.
+    feishu_streaming_edit_enabled: bool = Field(default=True, validation_alias="FEISHU_STREAMING_EDIT")
+    # Min seconds between card updates and min newly-accumulated chars per update;
+    # together they throttle PATCH calls to stay under Feishu update rate limits.
+    feishu_stream_min_interval_seconds: float = Field(
+        default=0.7, ge=0.0, validation_alias="FEISHU_STREAM_MIN_INTERVAL_SECONDS",
+    )
+    feishu_stream_min_chars: int = Field(default=40, ge=1, validation_alias="FEISHU_STREAM_MIN_CHARS")
     feishu_message_chunk_chars: int = Field(default=1500, validation_alias="FEISHU_MESSAGE_CHUNK_CHARS")
     # Feishu caps im/v1/files at 30 MB, the tighter of the two channels.
     push_file_max_mb: int = Field(default=30, validation_alias="PUSH_FILE_MAX_MB")
@@ -181,6 +201,12 @@ class Settings(BaseSettings):
     def feishu_send_message_url(self) -> str:
         base = self.feishu_api_base.rstrip("/")
         return f"{base}/open-apis/im/v1/messages"
+
+    @property
+    def feishu_message_url_template(self) -> str:
+        # PATCH here to update the content of an interactive card the bot sent.
+        base = self.feishu_api_base.rstrip("/")
+        return f"{base}/open-apis/im/v1/messages/{{message_id}}"
 
     @property
     def feishu_image_upload_url(self) -> str:

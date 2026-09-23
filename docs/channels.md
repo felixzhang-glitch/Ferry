@@ -46,10 +46,11 @@ lark-oapi SDK (WebSocket 长连接) → FeishuWsClient → FeishuWebhookHandler.
 ### 关键实现
 
 - **消息类型**：私聊文本 + 图片；群聊 @ 触发（`FEISHU_GROUP_REQUIRE_MENTION`）
-- **回复格式**：Markdown 卡片渲染，失败自动降级纯文本；超长文本智能分段（保留代码块/段落边界）
+- **回复格式**：Markdown 卡片渲染，失败自动降级纯文本；超长文本智能分段（保留段落/代码块边界）
+- **渐进式卡片**：`FEISHU_STREAMING_EDIT=true`（默认）时进入流式立即发一张占位卡，随 pi 生成按 `FEISHU_STREAM_MIN_INTERVAL_SECONDS` / `FEISHU_STREAM_MIN_CHARS` 节流 PATCH 同一张卡；pi 执行工具期间卡片显示 `> 🔧 <工具> · <参数摘要>`（源自 `tool_execution_start/end`），尚无正文时显示 `> 🌿 正在处理…`，定稿清空 footer。创建或 PATCH 失败即降级为整段单条回复，在途卡片记在 `_active_stream_cards`，取消/异常时覆盖而非新发。微信通道无此机制
 - **图片处理**：接收图片（下载到本地交给 pi）+ 发送图片（识别 CLI 输出中的本地路径自动上传）；生成图片发现使用 `GENERATED_IMAGES_DIR`，兼容旧 `CODEX_GENERATED_IMAGES_DIR`，不依赖 Codex CLI
 - **文件处理**：接收文件归档到 `FILE_ARCHIVE_DIR` 并回执「已收藏」，同时排入会话通知（见下文「入站文件与会话」）；发送文件走 `im/v1/files` 上传 + `msg_type:file`，由统一入口 `/push/file` 触发
-- **Quick Ack**：收到消息立即发 Typing reaction，最终答案汇总后单条回复
+- **Quick Ack**：收到消息立即发 Typing reaction；正文经上述占位卡渐进呈现，不再等整段生成完
 
 ### 文件
 

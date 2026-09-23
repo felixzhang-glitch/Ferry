@@ -24,7 +24,7 @@
 
 ## 配置与迁移边界
 
-后端配置统一使用 `PI_*`，渠道、文件、记忆、队列等共享配置继续保留，模型服务凭证（如 `DASHSCOPE_API_KEY`）仍按 pi provider 配置使用
+后端配置统一使用 `PI_*`，渠道、文件、记忆、队列等共享配置继续保留，模型服务凭证（`DASHSCOPE_API_KEY`、`DEEPSEEK_API_KEY`）仍按 pi provider 配置使用
 
 - 模型注册表 `conf/pi/models.json` 随仓库版本化，服务启动时自动同步到 `~/.pi/agent/models.json`（字节对比、差异才写、写前备份、失败不阻断）；切换模型只改 `conf/.env` 的 `PI_MODEL` + 重启，未注册模型会被 pi 以默认元数据透传并触发启动告警
 - `PI_WORK_DIR` 是 pi 子进程的**最终 cwd**，不会再追加 `/pi`

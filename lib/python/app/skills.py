@@ -3,15 +3,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# Shared skill files are independent of which CLI is installed. Project skills
-# take precedence; legacy global directories remain discovery sources only.
-SKILL_ROOTS = (
-    str(Path(__file__).resolve().parents[3] / "skills"),
-    "~/.pi/agent/skills",
-    "~/.agents/skills",
-    "~/.claude/skills",
-    "~/.codex/skills",
-)
+# Discovery is limited to this repository's own skills/ directory. Global CLI
+# directories (~/.pi, ~/.agents, ~/.claude, ~/.codex) are intentionally not read:
+# the bridge must not pick up whatever other agents happen to have installed.
+SKILL_ROOTS = (str(Path(__file__).resolve().parents[3] / "skills"),)
 
 
 def build_skill_summary(*, limit: int = 80) -> str:

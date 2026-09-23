@@ -65,6 +65,7 @@ sequenceDiagram
 ## 能力
 
 - 双渠道对话：飞书走 WS 长连接，微信走 Node.js sidecar 长轮询，共享同一套会话逻辑
+- 飞书渐进式回复：占位卡先落地，pi 跑工具时卡片显示当前在跑的工具，正文到达后逐步覆盖同一张卡（微信整段回复不变）
 - 会话隔离与秩序：渠道会话 key → pi session 映射，消息去重，FIFO 排队，任务可取消
 - pi 生命周期管理：超时、重试、熔断、取消回收；部分流式输出后不重试，避免答一半重来
 - 文件与图片：入站图片经 pi 原生 `@file` 多模态喂给模型（飞书图文混排、微信图片均可），文件归档后附件通知搭载下一条消息，双渠道文件推送
@@ -131,7 +132,7 @@ curl --fail http://127.0.0.1:8080/healthz
 | `PI_CLI_BIN` | pi 命令名或绝对路径，默认 `pi` |
 | `PI_MODEL` | `provider/model-id`，改这一行加重启即切换模型 |
 | `PI_WORK_DIR` | pi 工作目录，默认 `./runtime/codex-workdir/pi` |
-| `PI_TIMEOUT_SECONDS` | 单次 CLI 尝试总时限，默认 300 秒 |
+| `PI_TIMEOUT_SECONDS` | 单次 CLI 尝试总时限，默认 180 秒 |
 | `PUSH_API_TOKEN` | 出站文件推送 `POST /push/file` 的鉴权 |
 
 迁移注意：旧 `CODEX_*` 键仅作回退；不要直接移动现有 cwd、session store 或 agent dir，恢复会话需要映射与 pi transcript 同时可用。详见 [单 pi 接入与迁移](docs/routing.md)
@@ -142,6 +143,8 @@ curl --fail http://127.0.0.1:8080/healthz
 .venv/bin/python -m pytest -c conf/pytest.ini -q
 node --test tests/wechat-sidecar.test.mjs
 ```
+
+`tests/` 是本地目录，不随仓库分发（已取消跟踪 + `.gitignore`）：clone 下来无测试可跑，用例映射见 [测试要点](docs/TEST.md)
 
 验收清单见 [核心功能回归测试](docs/functional-tests.md)，每次迭代必过
 
@@ -156,7 +159,7 @@ rules/        注入 pi 的规则：system.md 公共 / admin.md 私有（gitigno
 skills/       项目级技能
 memory/       长期记忆
 runtime/      会话映射与运行状态
-tests/        Python 与 Node 测试
+tests/        Python 与 Node 测试（本地目录，不入库）
 docs/         架构、运维与变更记录
 ```
 

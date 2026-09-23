@@ -87,12 +87,13 @@ pi --mode json --session-id <id> [--model <provider/model>] \
 | `PI_CLI_BIN` | `pi` | 二进制路径，生产必须写绝对路径（见下文 supervisor 一节） |
 | `PI_MODEL` | （空） | 形如 `provider/model-id`；留空则用 pi 默认 provider |
 | `DASHSCOPE_API_KEY` | （空） | 百炼 Key，注入子进程环境供 models.json 的 `$DASHSCOPE_API_KEY` 插值 |
+| `DEEPSEEK_API_KEY` | （空） | DeepSeek 官方 Key，注入子进程环境供 models.json 的 `$DEEPSEEK_API_KEY` 插值 |
 | `PI_THINKING` | `high` | 推理强度 reasoning_effort，经 `--thinking` 下发；取值 `off/minimal/low/medium/high/xhigh/max`，留空不传（详见下文推理强度一节） |
 | `PI_TOOLS` | （空） | `--tools` allowlist，留空不传 |
 | `PI_CODING_AGENT_DIR` | （空） | pi 配置目录，留空用默认 `~/.pi/agent` |
 | `PI_OFFLINE` | `true` | 关闭启动期版本检查与遥测，降低每轮冷启动延迟 |
 | `PI_APPROVE_PROJECT` | `true` | 是否传 `--approve` |
-| `PI_TIMEOUT_SECONDS` | `300` | 每次 CLI 尝试的总时限，包含退出等待，不包含排队、退避与此前尝试 |
+| `PI_TIMEOUT_SECONDS` | `180` | 每次 CLI 尝试的总时限，包含退出等待，不包含排队、退避与此前尝试 |
 | `PI_IDLE_TIMEOUT_SECONDS` | `120` | 单行 stdout idle 超时 |
 | `PI_SESSION_STORE_PATH` | `./runtime/server/pi-sessions.json` | session ID 映射持久化 |
 | `PI_WORK_DIR` | `./runtime/codex-workdir/pi` | 最终 cwd，不再自动追加 `/pi` |
@@ -119,9 +120,9 @@ pi --mode json --session-id <id> [--model <provider/model>] \
 
 后端选择配置与状态文件不再参与运行；渠道、记忆和 provider 凭证继续保留。不要自动迁移现有 cwd、`PI_SESSION_STORE_PATH` 或 `PI_CODING_AGENT_DIR`，更不能删除旧运行目录或用户数据；pi 会话按 cwd 组织，换目录可能破坏续接。完整边界见 [单 pi 接入](../routing.md)
 
-## 自定义模型注册（阿里云百炼）
+## 自定义模型注册
 
-pi 不内置百炼 provider，需在 `~/.pi/agent/models.json` 注册（模板：`conf/pi/models.json.example`）：
+注册表是仓内 `conf/pi/models.json`，服务启动时自动同步到 `~/.pi/agent/models.json`。pi 不内置百炼 provider，必须整条注册：
 
 ```json
 {
@@ -160,6 +161,50 @@ pi 不内置百炼 provider，需在 `~/.pi/agent/models.json` 注册（模板�
 - 验证注册结果：`PI_OFFLINE=1 pi --list-models bailian`。models.json 在每次打开 `/model` 时重载，
   改完不用重启 pi（但 Ferry 侧改 `.env` 需要重启服务）。
 
+### DeepSeek 官方（provider `deepseek`）
+
+`deepseek` 是 pi 内置 provider（`baseUrl: https://api.deepseek.com`、`openai-completions`、
+`DEEPSEEK_API_KEY` 环境鉴权），但内置目录只有 `deepseek-v4-flash` / `deepseek-v4-pro`，
+没有 `deepseek-flash`，所以在注册表里补一条：
+
+```json
+{
+  "providers": {
+    "deepseek": {
+      "name": "DeepSeek 官方",
+      "baseUrl": "https://api.deepseek.com",
+      "api": "openai-completions",
+      "apiKey": "$DEEPSEEK_API_KEY",
+      "models": [
+        {
+          "id": "deepseek-flash",
+          "name": "DeepSeek V4.1 Flash",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 1000000,
+          "maxTokens": 16384
+        }
+      ]
+    }
+  }
+}
+```
+
+- 合并语义：内置模型保留，自定义按 `id` upsert。`PI_OFFLINE=1 pi --list-models deepseek` 实测三条并列，
+  `deepseek-flash` 显示 1M / 16.4K / thinking yes / images yes。
+- **不写 `compat`**：pi 按 provider id（或 baseUrl 含 `deepseek.com`）自动判定 `thinkingFormat: "deepseek"`、
+  `maxTokensField: "max_tokens"`、`supportsDeveloperRole: false`、`supportsStore: false`、
+  `requiresReasoningContentOnAssistantMessages: true`，且 `supportsReasoningEffort: true`。本地 mock 抓到的
+  真实请求体印证：只有 `max_tokens: 16384`（无 `max_completion_tokens`）、消息角色只有 `system`/`user`。
+- 请求路径是 `<baseUrl>/chat/completions`（**不带 `/v1`**）；实测 `https://api.deepseek.com/chat/completions`
+  与 `/v1/chat/completions` 都返回 200，所以 baseUrl 照 pi 内置值原样写即可。
+- `maxTokens: 16384` 沿用百炼条目的取舍（IM 回复够用 + 钉住压缩摘要输出预算），不是端点上限。
+- 图文：`input: ["text","image"]` 让 pi 接受 `@file` 图片，请求体里是
+  `{"type":"image_url","image_url":{"url":"data:image/png;base64,…"}}`；真实调用能正确回答图片颜色。
+- 密钥只落 gitignored 的 `conf/.env`（`DEEPSEEK_API_KEY`），由 `app/config.py` 读入、
+  `PiCliClient._process_env` 注入 pi 子进程与常驻 worker，不走 `--api-key`、不进 `ps`。
+- 验证记录：`runtime/deepseek-switch-verification.json`（mock 抓包 + 真实文本/图片/会话续接三轮）。
+
 ## 推理强度 reasoning_effort
 
 pi 的 `--thinking <level>` 对 openai-completions provider 会转成请求体的 `reasoning_effort`，
@@ -175,6 +220,11 @@ Ferry 侧由 `PI_THINKING` 控制，默认 `high`，经 [pi_cli.py](../../lib/py
 即实际只有两档：`{low, medium, high}` → high，`{xhigh, max}` → max。写 `low` 等于不写，
 想加深推理只有 `xhigh`/`max` 有效，代价是延迟和 token 上升。因为该模型默认就开思考，
 `PI_THINKING=high` 与服务端默认等效，只是把档位变得显式且可调；`PI_THINKING=off` 则关思考。
+
+**「只有两档」仅限百炼 provider。** DeepSeek 官方端点（`deepseek/deepseek-flash`）走 pi 的
+`thinkingFormat: "deepseek"`：`PI_THINKING=low` 会原样下发 `reasoning_effort: "low"` 并附
+`thinking: {"type":"enabled"}`（本地 mock 抓到的真实请求体确认）；按 pi 源码，`off` 改发
+`thinking: {"type":"disabled"}`（未实测）。当前生产取值 `low`。
 
 ## 上下文自动压缩
 
@@ -229,7 +279,23 @@ agent_end        willRetry=false（为 true 时不是真结束）
 agent_settled    真正结束标志
 ```
 
-Ferry 侧的三条解析规则：
+带工具调用的轮次在 assistant 段额外插入（实测 0.84.2 + deepseek provider，2026-09-22）：
+
+```
+message_update   assistantMessageEvent.type = thinking_start / thinking_delta / thinking_end
+message_update   assistantMessageEvent.type = toolcall_start / toolcall_delta / toolcall_end
+message_end      role=assistant，stopReason=toolUse，content[] 含 thinking + toolCall{id,name,arguments}
+tool_execution_start   {toolCallId, toolName, args}            ← 进度提示与计时起点
+tool_execution_update  {…, partialResult}                      ← 工具分片输出，Ferry 忽略
+tool_execution_end     {toolCallId, toolName, result, isError} ← 进度清除与工具耗时
+message_start    role=toolResult，含 toolCallId / toolName / isError
+message_end      role=toolResult
+turn_end → turn_start（进入下一个模型往返）
+```
+
+`stopReason=toolUse` 是中间态，不参与成败判定；判定仍只看最后一条 assistant `message_end`。
+
+Ferry 侧的四条解析规则：
 
 1. 只取 `message_update.assistantMessageEvent.text_delta` 的 `delta` 直接输出，
    `thinking_delta` / `toolcall_delta` 一律丢弃，思考不进回复。
@@ -241,6 +307,8 @@ Ferry 侧的三条解析规则：
 {"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error",
  "errorMessage":"401: {\"message\":\"Incorrect API key provided...\",\"code\":\"invalid_api_key\"}"}}
 ```
+
+4. `tool_execution_start` / `tool_execution_end` 用于进度与工具耗时：打 `pi.tool_call`（`tool` / `tool_detail` / `elapsed_ms`）与 `pi.tool_result`（`tool` / `duration_ms` / `is_error`），并经 `chat_stream(on_progress=...)` 把标签推给渠道渲染。`tool_execution_update` 的分片输出一律忽略——每个 chunk 都刷一次卡片会打爆飞书接口
 
 分帧按 `\n` 切即可（Python 的 `readline()` 合规）。不要对整段 stdout 做 `splitlines()`，
 它会在 `U+2028`/`U+2029` 上误切。

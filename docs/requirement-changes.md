@@ -3,6 +3,95 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-09-23 · 推送前隐私闸门收口（.env 变体不入库 / tests 停止分发 / 误报白名单）
+
+- **需求**：接入通用 `git-push` skill（真身 `~/.codex/skills/git-push/`，经 `~/.agent/skills/git-push` 符号链接进 omp 的唯一 skills 根；闸门脚本 `scripts/preflight.py`）后，处理它在本仓查出的三项：① `.env` 时间戳备份未被忽略，一次 `git add -A` 就会把真密钥推上公开仓；② `memory/README.md` 只是目录说明、无隐私数据，应正常分发且不再告警；③ 测试文件后续不再推送（用户确认范围为整个 `tests/`）
+- **改动**：
+  - `.gitignore`：`/.env` + `/conf/.env` 两条窄规则换成 `.env` / `.env.*` / `!.env.example` —— 任意层级的 `.env` 本体与一切变体（`.env.local`、`conf/.env.bak.20260921-172446` 这类时间戳备份）全部不入库，只放行 `*.example` 模板
+  - `git rm -r --cached tests/` + `.gitignore` 追加 `tests/`：28 个已跟踪文件（27 个 `.py` + `wechat-sidecar.test.mjs`）取消跟踪，文件保留在本地磁盘，后续不再随仓库分发。`conf/pytest.ini` 的 `testpaths = ../tests` 不变，本地开发流程零影响
+  - 新增 `.git-push-allowlist.txt`（入库共享）：`path:memory/README.md`；`fingerprint:061bec1…` 放行 `skills/zhihu/references/http-api.md` 里被误判成手机号的知乎 ContentID（11 位文章 ID，同值也出现在 `zhuanlan.zhihu.com/p/<ContentID>` 链接中；该目录第三方托管、升级会覆盖，故不改文件而是走白名单）
+  - 文档同步标注 `tests/` 为本地目录：`README.md`（测试小节 + 目录树）、`AGENTS.md`（常用命令 + 不提交敏感信息，并写入 preflight 闸门与 allowlist 约定）、`docs/TEST.md`、`docs/architecture.md`、`docs/functional-tests.md`
+- **影响范围**：`.gitignore`、新增 `.git-push-allowlist.txt`、`tests/` 的跟踪状态、5 份文档 + 本文件；业务代码与配置零改动。**已推送的历史里 `tests/` 与旧 `.env` 规则下的内容仍然存在**——取消跟踪不等于清历史，如需彻底移除要另走 `git filter-repo` + 强推
+- **验证**：`git check-ignore -v` → `conf/.env` 命中 `.gitignore:6:.env`、`conf/.env.bak.20260921-172446` 命中 `:7:.env.*`、`runtime/.env.bak-2026*` 命中 `runtime/`、`tests/conftest.py` 命中 `:25:tests/`，而 `conf/.env.example` 未被忽略且 `git ls-files --error-unmatch` 确认仍被跟踪；`cd conf && pytest --collect-only -q` → **582 tests collected**（取消跟踪后本地用例收集不受影响）；`preflight.py --scope worktree` → A/C/D 三段全通过、B 段 0 ERROR，allowlist 生效后 0 ERROR / 0 WARN，D 段自动调用 `.qoder/hooks/secret_scan.py` 通过
+
+## 2026-09-23 · skills 发现范围收敛（Ferry 只扫项目 `skills/`；omp 只留 `~/.agent/skills`）
+
+- **需求**：① omp 的 skills 加载路径只保留 `~/.agent/skills`；② Ferry 注入 pi 的 skills 只允许读 `/data/app/Ferry/skills`，其它全局目录一律不读
+- **Ferry 侧**：`app/skills.py` 的 `SKILL_ROOTS` 从 5 个根（项目 `skills/` + `~/.pi/agent/skills` + `~/.agents/skills` + `~/.claude/skills` + `~/.codex/skills`）收敛为**只剩项目 `skills/`**。顺带消掉一个真实隐患：原先 `os.walk` 会下探 `~/.codex/skills/.system/`，把 Codex 内置的 `skill-creator` / `skill-installer` / `openai-docs` / `imagegen` / `plugin-creator` 当成可用技能写进 pi 的 system prompt；现在这些根不再被读
+- **omp 侧**：`~/.omp/agent/config.yml` 显式写入 `skills.enableAgentsUser: true`，其余来源全关（`enableAgentsProject` / `enableClaudeUser` / `enableClaudeProject` / `enableCodexUser` / `enablePiUser` / `enablePiProject` 均为 `false`）；`enabledProviders` 保持空数组，外部 CLI 的用户级根不入发现。实测 `omp read skill://notion-cli` 返回的来源头就是 `.agent/skills/notion-cli/SKILL.md`（该目录下 8 个符号链接即当前全部可用技能）
+- **影响范围**：`lib/python/app/skills.py`、`tests/test_skills.py`、`docs/architecture.md`、`docs/functional-tests.md`、本文件；`/skills` 命令、首轮摘要注入与 `build_skill_summary` 的三个调用方（`channel/feishu/handler.py`、`channel/wechat/handler.py`、`core/agent/pi_cli.py`）签名与行为不变
+- **验证**：`cd conf && pytest -q` → **582 passed**（`test_summary_supports_multiline_description_and_project_precedence` 拆成 `test_summary_folds_multiline_description`，多根优先级断言随需求删除；`test_project_root_points_to_actual_skills` 升级为 `test_only_project_skills_dir_is_discovered`，断言 `SKILL_ROOTS` 恰为项目 `skills/` 单根——改动前 5 根必失败）。真机冒烟：`build_skill_summary()` 只出 13 个项目技能，`lark-cli` / `notion-cli` / `pdf` / `daily-diet-log` 等仅存在于全局目录的技能全部消失。omp 侧用 14 个探针目录（用户级 `~/.agent|.agents|.claude|.codex|.pi|.omp/agent/skills|managed-skills` + 项目级 `.agents|.agent|.claude|.codex|.omp|.github|skills`）逐个 `omp read skill://<probe>` 跑出加载矩阵，探针已全部清除、目录状态已复原
+- **边界**：omp 仍有两处不受 `skills.*` 开关管辖的残留来源——`~/.omp/agent/managed-skills`（auto-learn，实测会被发现，当前为空）与外部 CLI 的**项目级**根 `<repo>/.codex/skills`、`<repo>/.github/skills`（实测会被发现，Ferry 仓内均不存在；`<repo>/skills` 从来不是 omp 的根）。要彻底封死只能上 `disabledProviders: [codex, github]`，但那会连带停掉这两个来源的 context files / MCP / commands / hooks，爆炸半径超出本次需求，故未动
+
+## 2026-09-22 · 延迟四项优化 + 观测缺口修复（首字前进度 / 限流不 sleep / 往返合并 / 超时收敛）
+
+- **需求**：先分析近期会话定位耗时，再对 ①首字前静默 ②限流 sleep 退避 ③模型往返次数 ④超时上限 逐项优化，并补齐正在阻碍优化的观测缺口
+- **定位（实测，`logs/ferry.log` 194 轮 + 8 个 pi transcript 重建 50 轮）**：pi 调用占总时长 ≈98%；轮内 model 82% / tool 18%；`worker setup` p50 96ms（占轮时 0.1–0.7%，09-21 那次优化已榨干）；飞书出站残差 mean 749ms（≈2 个 HTTP RTT，已是下限）；前缀缓存正常（cacheRead 3.03M vs input 1.36M）。真正的四个洞：**首字前静默中位占轮时 77.4%**（24/43 轮 >50%，max 220s）；**工具总时长 300s 里 232s 是 5 次 `sleep 20..90` 限流退避（占 77%）**，直接造成最慢两轮 224s / 127s；**模型往返均值 3.08 次/轮**（p90 7 次，每次约 1.2s 固定开销）；**1 轮跑满 300s 才报超时**，另 2 轮 192s/155s 后被 provider 内容审核打断，共 647s 白等
+- **观测缺口修复**：
+  - `app/logging.py`：删掉硬编码 extra 白名单，改收 record 上所有非 `LogRecord` 内置字段（`json.dumps(default=str)` 兜底）。此前 `backend`、`feishu_stream_updates`、`feishu_streamed` 一直被静默丢弃——37 条 `pipeline.streaming` 无一能看出流式是否生效
+  - `channel/feishu/client.py`：四个传输助手（`_post_authenticated_json` / `_post_authenticated_multipart` / `_get_authenticated_bytes` / `_post_json_with_retries`）在成功返回前统一打点 `duration_ms` + `attempt`，删掉 10 处各方法重复的成功日志；`update_markdown_card` 此前成功路径零日志（全日志 `feishu.update_card` 出现 0 次），现在自动获得打点。`upload_file` 的 `file_type`/`size` 经新增 `log_extra` 保留
+  - `core/agent/pi_cli.py`：解析 pi 的 `tool_execution_start` / `tool_execution_end`（schema 实测于 0.84.2 + deepseek），新增 `pi.tool_call`（`tool`/`tool_detail`/`elapsed_ms`）与 `pi.tool_result`（`tool`/`duration_ms`/`is_error`），Ferry 侧首次有工具级耗时数据
+- **① 首字前静默**：`AgentClient.chat_stream` 增 `on_progress` 回调（`core/agent/types.py` 定义 `ProgressCallback`），pi_cli 在工具开始/结束时推送或清除标签；飞书 `_stream_to_feishu` 改为 body+footer 渲染——**进入流式立刻建占位卡（`> 🌿 正在处理…`）不等首字**，工具运行时显示 `> 🔧 bash · <命令>`，正文开始后自动撤掉占位、定稿清空 footer。节流放宽为「间隔到 且（正文增长 ≥ `FEISHU_STREAM_MIN_CHARS` 或 footer 变化）」，否则纯 footer 更新会被字数门卡死。回调异常由 `_emit_progress` 吞掉并告警，进度提示不会掀掉整轮
+- **② 限流 sleep 退避**：新增 `bin/zhihu-hot`（TTL 300s 缓存；命中直接返回并标注抓取时间；限流/失败回退上次缓存并标注原因；**任何情况都不 sleep、不重试**）。`zhihu-cli` 限流时 body 是 `{"Code":30001,"Message":"rate limit exceeded"}`，故按 body 的 `Code` 判定失败而非退出码。`rules/system.md` 热榜改走该包装，并新增「效率」段硬禁在 bash 里 `sleep` 等限流。未改 `skills/zhihu/`（第三方托管，升级会覆盖）
+- **③ 往返次数**：`rules/system.md`「效率」段要求探查类操作合并成一条 bash、多文件一次读全，并写明每次往返约 1.2s 固定开销
+- **④ 超时**：`PI_TIMEOUT_SECONDS` 默认 300 → 180（`config.py` + `conf/.env` + `.env.example`），deepseek-flash p90 25s 留 7 倍余量。`PI_IDLE_TIMEOUT_SECONDS` **保持 120 不动**——它是卡死检测器，实测最长合法静默工具 90.3s（且那次正是 sleep），压到 60s 会误杀正常的慢 curl / find
+- **影响范围**：`app/logging.py`、`channel/feishu/{client.py,handler.py}`、`core/agent/{pi_cli.py,types.py}`、`app/config.py`、`conf/.env`、`conf/.env.example`、`rules/system.md`、新增 `bin/zhihu-hot`、Python 测试与 6 份文档。`channel/wechat/`、`lib/js/`、会话映射、记忆、队列、定时任务一行未改
+- **边界**：微信通道无卡片可编辑，不接进度（否则会变成刷屏）；`FEISHU_STREAMING_EDIT=false` 仍可一键回退整段发送；`PI_PERSISTENT_ENABLED=false` 仍可回退逐轮 CLI；模型、thinking、cwd、transcript 均未动
+- **验证**：全量 `cd conf && pytest -q` → **582 passed**（基线 577，新增 5 条：`_tool_execution` 用真实 pi 载荷解码、占位卡先于首字并渲染工具进度、`update_markdown_card` 必须走 PATCH 而非新建消息、formatter 保留任意 extra、formatter 序列化非 JSON 值）；JS 侧用 `PI_NODE_BIN` 的 22.23.2 跑 `pi-worker.test.mjs` + `wechat-sidecar.test.mjs` → **33 passed**（默认 PATH 的 20.19.4 会因 undici 缺 `markAsUncloneable` 失败 10/14，已在 `docs/functional-tests.md` 写明）。真实 pi + 真实 `PiCliClient`/worker 池 + 真实 handler + 记录型 feishu client 冒烟两次：第一次抓到 `pi.tool_call`(elapsed_ms 1662)、`pi.tool_result`(duration_ms 4039, is_error false)、`pi.stream` 带 `backend`、`pipeline.streaming` 带 `feishu_stream_updates:5 / feishu_streamed:true`，同时暴露占位卡带前导 `\n\n` 的缺陷；修复后第二次卡片序列为 `1ms CREATE "> 🌿 正在处理…"` → `1685ms UPDATE "> 🔧 bash · echo smoke-start; sleep 4; echo smoke-end"` → `5809ms UPDATE` 工具结束回占位 → `6621/6660ms UPDATE` 正文与定稿，footer 已清空。`bin/zhihu-hot` 三条路径实测：无缓存+限流 exit 1 并明示原因、10 分钟前缓存+限流回退 exit 0 标注 600s 前、TTL 内命中 0.336s 完全不打接口
+- **生效**：`supervisorctl restart ferry-stack:ferry`，新主进程 3693100，worker 3693155(3270ms)/3693183(3922ms) 预热完成，飞书 WS 重连，`/healthz` ok，进程环境确认 `PI_TIMEOUT_SECONDS=180`、`PI_IDLE_TIMEOUT_SECONDS=120`、`PI_MODEL=deepseek/deepseek-flash`；微信 sidecar 2987879 未重启；重启窗口无 ERROR/WARNING。**未向真实 IM 会话发消息**，飞书卡片进度的实际视觉效果需用户端肉眼确认
+
+## 2026-09-22 · 切换到 DeepSeek 官方 deepseek-flash（新增 deepseek provider）
+
+- **需求**：切换模型，新增 DeepSeek 官方端点（OpenAI 格式 `https://api.deepseek.com`）的 `deepseek-flash`（实际版本 DeepSeek-V4.1-Flash，1M 上下文、支持图文），`reasoning_effort` 配 `low`
+- **改动**：
+  - `conf/pi/models.json`：新增 `deepseek` provider（`baseUrl`/`api: openai-completions`/`apiKey: $DEEPSEEK_API_KEY`）与模型 `deepseek-flash`（`reasoning`、`input: ["text","image"]`、`contextWindow: 1000000`、`maxTokens: 16384`）。`deepseek` 是 pi 内置 provider，自定义条目按 id upsert，内置 `deepseek-v4-flash`/`deepseek-v4-pro` 保留；不写 `compat`，pi 按 provider id 自动判定 deepseek `thinkingFormat`、`max_tokens` 字段、不发 developer role、`supportsReasoningEffort: true`
+  - `conf/.env`：`PI_MODEL=deepseek/deepseek-flash`、`PI_THINKING=low`、新增 `DEEPSEEK_API_KEY`；改前备份 `runtime/service-backups/env-before-deepseek-switch-20260922-202209`
+  - `app/config.py` + `core/agent/pi_cli.py`：新增 `pi_deepseek_api_key`（`DEEPSEEK_API_KEY`），`_process_env` 按 DASHSCOPE 同样方式注入 pi 子进程与常驻 worker，密钥不进命令行、不进 `ps`；`tests/test_pi_session.py`、`tests/test_pi_multimodal.py` 的 settings 桩补同名字段
+  - `conf/.env.example`、`docs/references/pi-cli.txt`（配置表 + DeepSeek 注册小节 + 推理强度差异说明）、`docs/routing.md` 凭证说明
+- **边界**：百炼 provider 与 `bailian/*` 三个模型条目原样保留；回退只需 `PI_MODEL=bailian/qwen3.8-flash`（`PI_THINKING` 按需回 medium）+ 重启。渠道、会话、记忆、队列与业务规则代码未动
+- **验证**：全量 `cd conf && pytest -q` → 577 passed；`sync_pi_models` 实跑同步成功且无未注册告警，`PI_OFFLINE=1 pi --list-models deepseek` 显示 `deepseek-flash` 1M/16.4K/thinking yes/images yes（内置两条并列）；隔离 agent dir + 本地 HTTP mock 抓到 pi 真实请求体：`model=deepseek-flash`、`reasoning_effort=low`、`thinking={"type":"enabled"}`、`max_tokens=16384`（无 `max_completion_tokens`）、角色仅 system/user、路径 `<baseUrl>/chat/completions`、图片以 `image_url` data URL 传入；真实 API 经生产 `PiCliClient`（常驻 worker）三轮：文本答「在线」、蓝色图答「蓝色」、同 session_key 续接答「在线」。证据 `runtime/deepseek-switch-verification.json`
+- **生效**：`supervisorctl restart ferry-stack:ferry`，主进程 3667854、worker 3667902/3667931 均确认 `PI_MODEL=deepseek/deepseek-flash`、`PI_THINKING=low`、`DEEPSEEK_API_KEY` 就位，pi 0.84.2 双 worker 预热完成、飞书 WS 重连、`/healthz` ok、重启后无 WARN/ERROR；微信 sidecar 2987879 未重启。未做真实 IM 客户端实发
+
+## 2026-09-22 · 飞书回复改为渐进式流式（微信不动）
+
+- **需求**：飞书改成流式输出，随 pi 生成边出边显示，缩短"整段等待"的体感；微信通道保持不变
+- **根因/现状**：`_stream_to_feishu` 虽消费 pi 流但攒完整段才一次性发卡片，用户在生成完成前无任何可见文本
+- **改动**：
+  - `app/config.py`：新增 `FEISHU_STREAMING_EDIT`(默认 true)、`FEISHU_STREAM_MIN_INTERVAL_SECONDS`(0.7)、`FEISHU_STREAM_MIN_CHARS`(40) 与 `feishu_message_url_template`
+  - `channel/feishu/client.py`：`_post_authenticated_json` 支持 `method`；`reply_markdown` 返回卡片 message_id；新增 `update_markdown_card`(PATCH 覆盖卡片内容)
+  - `channel/feishu/handler.py`：`_stream_to_feishu` 先发交互卡片占位、按"间隔+字数"节流 PATCH 更新、收尾定稿并单独补发图片；新增 `_active_stream_cards` 跟踪在途卡片，失败/取消时经 `_finalize_or_reply` 覆盖占位卡而非新发消息，避免残留半成品；`_safe_reply_with_images` 增加 `send_text` 开关
+  - `conf/.env.example`：补充上述三项配置说明
+- **边界**：`channel/wechat/handler.py` 一行未改；`FEISHU_STREAMING_EDIT=false` 可一键回退到整段发送
+- **验证**：新增 `tests/test_feishu_streaming.py`（流式一卡多次更新、关开关回退单发）；升级 `tests/test_pi_chain.py` 的 FakeFeishuClient 支持卡片更新语义；全量 `cd conf && pytest -q` → 577 passed。真实飞书首字可见需线上发一条消息肉眼确认
+
+## 2026-09-22 · 恢复 Qwen3.8 Flash 思考模式为 medium（修复思考外泄到正文）
+
+- **需求**：用户反馈微信回复里仍出现"思考"（如"让我核实""设鸡x只…"的推理旁白），要求开启思考且思考不外发
+- **根因**：`PI_THINKING=off` 时模型无私有思考通道，遇到需要推理的任务会把推理当正文（`text_delta`）输出，Ferry 过滤器只丢 thinking 事件、无法拦截合法正文，于是"思考"漏进回复；同时拉长输出显得更慢
+- **改动**：仅将 `conf/.env` 的 `PI_THINKING=off` 改回 `medium`，其余不变
+- **验证**：实测 pi `--thinking medium` 时推理走独立 `thinking_start/delta/end`（contentIndex 0），正文走 `text_delta`（contentIndex 1）；用 Ferry 真实 `PiCliClient.chat_stream` 路径跑"鸡兔同笼、只要答案不要过程"，组装正文仅 `鸡 23 只，兔 12 只。`，无任何元推理旁白
+- **生效**：Ferry 外部执行 `supervisorctl restart ferry-stack:ferry`（新 pid 2291208，RUNNING）；微信 sidecar 未重启。未改业务代码，未做真实 IM 客户端实发
+
+## 2026-09-22 · 关闭当前 Qwen3.8 Flash 思考模式
+
+- **需求**：用户反馈响应仍慢，要求关闭 `qwen3.8-flash` 的思考模式
+- **改动**：仅将 `conf/.env` 的 `PI_THINKING=medium` 改为 `off`，保留 `PI_MODEL=bailian/qwen3.8-flash`、常驻 worker 与原生会话；备份 `runtime/service-backups/env-before-qwen-thinking-off-20260922-095748`
+- **验证**：隔离的真实 SDK + 本地 HTTP mock 确认 medium 会话续接后 off 覆盖生效，请求包含 `enable_thinking=false` 且无 `reasoning_effort`；真实 Qwen 调用成功，thinking 事件数 0、reasoning tokens 0。全量 Python 575 passed；证据 `runtime/qwen-thinking-off-verification.json`、`runtime/qwen-thinking-off-tests.log`
+- **生效**：从 Ferry 外部执行 `supervisorctl restart ferry-stack:ferry`，进程 1615898 环境确认 `PI_THINKING=off`；两个 worker 预热正常，健康检查通过；微信 sidecar 2987879 未重启。未修改自重启机制或业务代码，未进行真实 IM 客户端实发
+
+## 2026-09-21 · 常驻 pi SDK worker：消除每条消息的 Node 冷启动
+
+- **需求**：先读取 AGENTS.md、给出完整方案后实施；复用 Node/pi 运行时降低响应延迟，允许完成后重启主服务
+- **实现**：新增 `lib/js/pi-worker.mjs`，复用 Node 模块但每轮创建/释放原生 AgentSession；重新加载 AGENTS/规则/skills/记忆/时间，不把 system 内容写进 transcript。使用 pi 0.84.2 SDK 与原生图片处理，保留会话 ID/文件、模型/工具、重试和压缩；不用缺少动态 system 更新与精确 ID 创建能力的原生 RPC
+- **编排**：新增 `core/agent/pi_worker.py` 有界池，默认 2 个 worker、启动预热、同 session 串行；关联 ID 校验、等待 `ferry_done` 才复用。取消/超时 SIGTERM 清理独立 bash 工具进程组后强杀兜底；崩溃/协议错误回收，后续补建；服务停止回收空闲与活动 worker
+- **兼容**：`PI_PERSISTENT_ENABLED=false` 可回退 CLI；新增 Node/SDK 路径与池大小配置，不改变模型、thinking、cwd、映射或现有 transcript。修复外层流提前关闭未等待内部清理，以及 Python 3.10 `wait_for` 同 tick 读完时吞取消的竞态
+- **观测**：增加 worker 启动、逐轮准备、首字耗时与 PID/复用标记；API Key 只走环境变量，不写入新增代码或命令参数
+- **影响范围**：`core/agent/{pi_cli.py,pi_worker.py}`、`lib/js/pi-worker.mjs`、`app/{config,main,logging}.py`、`conf/.env.example`、Python/Node 测试与架构/会话/验收文档。渠道 handler、微信 sidecar 和业务规则不改
+- **审查修复**：Linux 持续记录后代 PID/启动时间/PGID，强杀也清理独立工具组，防止 Node 卡死/崩溃时遗漏及 PID 复用误杀；补齐 pi 原生 HTTP 代理 bootstrap，复用 dispatcher、配置变更时有界释放旧连接；拿到 worker 后重建 system 输入，排队期间规则/时间变化下一轮立即生效
+- **验证**：全量 Python 575 passed；Node 33 passed（SDK/代理 14 + sidecar 19），未跳过。真实本地 SDK/CLI 互续同一 transcript、跨轮同 PID、规则刷新、重置隔离、无 session_key 的临时调用、真实 detached bash 取消与关闭回收均通过；另已复现 Node 事件循环阻塞，SIGKILL 兜底仍能清理原生独立 bash 进程组。代理测试覆盖环境/全局配置代理、大小写优先级、NO_PROXY、配置更新/移除、连接复用与释放
+- **测速**：最终版本、当前 `bailian/deepseek-v4-flash-0731` / `medium`，同短提示 CLI/worker 交替各 3 次：完整耗时中位数 4.289s → 1.295s，减少 2.994s（约 70%）；同 PID。隔离 localhost mock 去除模型网络后：CLI 中位数 2.768s，暖 worker 0.065s。仅是小样本短回复，不代表长任务总耗时同比降低；证据 `runtime/pi-worker-{real-verification,verification}.json`
+- **上线**：2026-09-21 19:14（北京时间）`supervisorctl restart ferry-stack:ferry` 完成，主进程 3642650，worker 3643101/3643186；健康接口正常、飞书 WS 重连、无新增 ERROR，微信 sidecar 2987879 未重启。生产 localhost webhook 两轮均回复 OK，同 worker PID，第二轮准备 35ms、完整响应 1.444s；证据 `runtime/pi-worker-production-{verification,state}.json`。这是本地 webhook + 真实模型验收，不是两端 IM 客户端实发；现有用户会话未迁移/清空，`.env` 备份在 `runtime/service-backups/`
+
 ## 2026-09-17 · 入站图片多模态修复：走 pi 原生 `@file` 语法
 
 - **需求**：当前模型（qwen3.8-flash）支持图片输入，但微信、飞书发图给机器人时模型「看不到」图片。微信只能单独发文字或图片、飞书支持图文混排，两种入站形式都要能正确把图片喂给模型

@@ -86,15 +86,6 @@ class FeishuClient:
             )
             raise FeishuClientError(f"feishu reply failed: {data}")
 
-        logger.info(
-            "feishu reply sent",
-            extra={
-                "trace_id": trace_id,
-                "event": "feishu.reply",
-                "status_code": response.status_code,
-            },
-        )
-
     async def send_text(
         self,
         receive_id: str,
@@ -136,15 +127,6 @@ class FeishuClient:
             )
             raise FeishuClientError(f"feishu send message failed: {data}")
 
-        logger.info(
-            "feishu message sent",
-            extra={
-                "trace_id": trace_id,
-                "event": "feishu.send",
-                "status_code": response.status_code,
-            },
-        )
-
         message = data.get("data")
         if isinstance(message, dict):
             message_id = message.get("message_id")
@@ -158,9 +140,9 @@ class FeishuClient:
         markdown: str,
         trace_id: str,
         request_uuid: str | None = None,
-    ) -> None:
+    ) -> str | None:
         if not markdown:
-            return
+            return None
 
         url = self._settings.feishu_reply_url_template.format(message_id=message_id)
         payload: dict[str, Any] = {
@@ -188,14 +170,47 @@ class FeishuClient:
             )
             raise FeishuClientError(f"feishu markdown reply failed: {data}")
 
-        logger.info(
-            "feishu markdown reply sent",
-            extra={
-                "trace_id": trace_id,
-                "event": "feishu.reply_markdown",
-                "status_code": response.status_code,
-            },
+        sent = data.get("data")
+        if isinstance(sent, dict):
+            new_id = sent.get("message_id")
+            if isinstance(new_id, str):
+                return new_id
+        return None
+
+    async def update_markdown_card(
+        self,
+        message_id: str,
+        markdown: str,
+        trace_id: str,
+    ) -> None:
+        """Overwrite the content of an interactive card the bot previously sent."""
+        if not markdown:
+            return
+
+        url = self._settings.feishu_message_url_template.format(message_id=message_id)
+        payload: dict[str, Any] = {
+            "content": json.dumps(build_markdown_card(markdown), ensure_ascii=False),
+        }
+
+        response, data = await self._post_authenticated_json(
+            url=url,
+            payload=payload,
+            trace_id=trace_id,
+            event="feishu.update_card",
+            method="PATCH",
         )
+        if data.get("code") != 0:
+            logger.error(
+                "feishu card update failed",
+                extra={
+                    "trace_id": trace_id,
+                    "event": "feishu.update_card",
+                    "status_code": response.status_code,
+                    "error_code": data.get("code"),
+                },
+            )
+            raise FeishuClientError(f"feishu card update failed: {data}")
+
 
     async def send_markdown(
         self,
@@ -235,15 +250,6 @@ class FeishuClient:
                 },
             )
             raise FeishuClientError(f"feishu markdown send failed: {data}")
-
-        logger.info(
-            "feishu markdown sent",
-            extra={
-                "trace_id": trace_id,
-                "event": "feishu.send_markdown",
-                "status_code": response.status_code,
-            },
-        )
 
         message = data.get("data")
         if isinstance(message, dict):
@@ -288,11 +294,6 @@ class FeishuClient:
             )
             raise FeishuClientError(f"feishu image reply failed: {data}")
 
-        logger.info(
-            "feishu image reply sent",
-            extra={"trace_id": trace_id, "event": "feishu.reply_image", "status_code": response.status_code},
-        )
-
     async def send_image(
         self,
         receive_id: str,
@@ -331,11 +332,6 @@ class FeishuClient:
                 },
             )
             raise FeishuClientError(f"feishu image send failed: {data}")
-
-        logger.info(
-            "feishu image sent",
-            extra={"trace_id": trace_id, "event": "feishu.send_image", "status_code": response.status_code},
-        )
 
         message = data.get("data")
         if isinstance(message, dict):
@@ -378,10 +374,6 @@ class FeishuClient:
         if not isinstance(image_key, str) or not image_key:
             raise FeishuClientError("missing image_key in upload response")
 
-        logger.info(
-            "feishu image uploaded",
-            extra={"trace_id": trace_id, "event": "feishu.upload_image", "status_code": response.status_code},
-        )
         return image_key
 
     async def upload_file(self, file_path: str, trace_id: str) -> str:
@@ -407,6 +399,7 @@ class FeishuClient:
                 event="feishu.upload_file",
                 # The shared client timeout is tuned for small JSON calls.
                 timeout=120.0,
+                log_extra={"file_type": file_type, "size": size},
             )
 
         if data.get("code") != 0:
@@ -428,16 +421,6 @@ class FeishuClient:
         if not isinstance(file_key, str) or not file_key:
             raise FeishuClientError("missing file_key in upload response")
 
-        logger.info(
-            "feishu file uploaded",
-            extra={
-                "trace_id": trace_id,
-                "event": "feishu.upload_file",
-                "status_code": response.status_code,
-                "file_type": file_type,
-                "size": size,
-            },
-        )
         return file_key
 
     async def send_file(
@@ -478,11 +461,6 @@ class FeishuClient:
                 },
             )
             raise FeishuClientError(f"feishu file send failed: {data}")
-
-        logger.info(
-            "feishu file sent",
-            extra={"trace_id": trace_id, "event": "feishu.send_file", "status_code": response.status_code},
-        )
 
         message = data.get("data")
         if isinstance(message, dict):
@@ -553,15 +531,6 @@ class FeishuClient:
             )
             raise FeishuClientError(f"feishu reaction failed: {data}")
 
-        logger.info(
-            "feishu reaction sent",
-            extra={
-                "trace_id": trace_id,
-                "event": "feishu.reaction",
-                "status_code": response.status_code,
-            },
-        )
-
     async def _get_tenant_access_token(self, trace_id: str) -> str:
         now = time.time()
         if self._tenant_access_token and now < self._token_expire_at - 60:
@@ -604,12 +573,34 @@ class FeishuClient:
             self._tenant_access_token = tenant_token
             self._token_expire_at = time.time() + expires_in
 
-            logger.info(
-                "feishu tenant token refreshed",
-                extra={"trace_id": trace_id, "event": "feishu.token", "status_code": response.status_code},
-            )
-
             return tenant_token
+
+    def _log_transport(
+        self,
+        *,
+        event: str,
+        trace_id: str,
+        status_code: int,
+        started: float,
+        attempt: int,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        """One INFO line per outbound call, carrying the latency actually paid.
+
+        Callers used to log their own success line without timing, so outbound
+        HTTP cost was only recoverable by subtracting two unrelated events.
+        """
+        fields: dict[str, Any] = {
+            "trace_id": trace_id,
+            "event": event,
+            "status_code": status_code,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+        }
+        if attempt:
+            fields["attempt"] = attempt
+        if extra:
+            fields.update(extra)
+        logger.info("feishu request completed", extra=fields)
 
     async def _post_authenticated_json(
         self,
@@ -618,14 +609,17 @@ class FeishuClient:
         trace_id: str,
         event: str,
         params: dict[str, str] | None = None,
+        method: str = "POST",
     ) -> tuple[httpx.Response, dict[str, Any]]:
         attempts = self._retry_attempts()
         last_error: Exception | None = None
+        started = time.monotonic()
 
         for attempt in range(attempts + 1):
             token = await self._get_tenant_access_token(trace_id=trace_id)
             try:
-                response = await self._client.post(
+                response = await self._client.request(
+                    method,
                     url,
                     params=params,
                     headers={
@@ -643,6 +637,13 @@ class FeishuClient:
                 continue
 
             if data.get("code") == 0:
+                self._log_transport(
+                    event=event,
+                    trace_id=trace_id,
+                    status_code=response.status_code,
+                    started=started,
+                    attempt=attempt,
+                )
                 return response, data
 
             if response.status_code == 401:
@@ -684,9 +685,11 @@ class FeishuClient:
         trace_id: str,
         event: str,
         timeout: float | None = None,
+        log_extra: dict[str, Any] | None = None,
     ) -> tuple[httpx.Response, dict[str, Any]]:
         attempts = self._retry_attempts()
         last_error: Exception | None = None
+        started = time.monotonic()
         # httpx reads an explicit None as "no timeout", not "client default".
         timeout_kwargs: dict[str, Any] = {"timeout": timeout} if timeout is not None else {}
 
@@ -710,6 +713,14 @@ class FeishuClient:
                 continue
 
             if data_json.get("code") == 0:
+                self._log_transport(
+                    event=event,
+                    trace_id=trace_id,
+                    status_code=response.status_code,
+                    started=started,
+                    attempt=attempt,
+                    extra=log_extra,
+                )
                 return response, data_json
 
             if response.status_code == 401:
@@ -743,6 +754,7 @@ class FeishuClient:
     ) -> tuple[httpx.Response, str]:
         attempts = self._retry_attempts()
         last_error: Exception | None = None
+        started = time.monotonic()
 
         for attempt in range(attempts + 1):
             token = await self._get_tenant_access_token(trace_id=trace_id)
@@ -761,9 +773,12 @@ class FeishuClient:
 
             content_type = response.headers.get("content-type", "")
             if response.status_code < 400 and not content_type.startswith("application/json"):
-                logger.info(
-                    "feishu resource downloaded",
-                    extra={"trace_id": trace_id, "event": event, "status_code": response.status_code},
+                self._log_transport(
+                    event=event,
+                    trace_id=trace_id,
+                    status_code=response.status_code,
+                    started=started,
+                    attempt=attempt,
                 )
                 return response, content_type
 
@@ -799,6 +814,7 @@ class FeishuClient:
     ) -> tuple[httpx.Response, dict[str, Any]]:
         attempts = self._retry_attempts()
         last_error: Exception | None = None
+        started = time.monotonic()
 
         for attempt in range(attempts + 1):
             try:
@@ -816,6 +832,13 @@ class FeishuClient:
                 continue
 
             if data.get("code") == 0:
+                self._log_transport(
+                    event=event,
+                    trace_id=trace_id,
+                    status_code=response.status_code,
+                    started=started,
+                    attempt=attempt,
+                )
                 return response, data
             if attempt >= attempts or not self._is_retryable_response(response=response, data=data):
                 return response, data

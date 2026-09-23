@@ -2,8 +2,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
-/.env
-/conf/.env
+# .env 本体与一切变体/时间戳备份（.env.local、.env.bak.20260921-172446 等）都不入库，只留 *.example 模板
+.env
+.env.*
+!.env.example
 /conf/wechat/account.json
 # sync_pi_models 每次改模型生成的时间戳备份，不入库
 conf/pi/models.json.bak.*
@@ -19,3 +21,5 @@ rules/admin.md
 !/memory/README.md
 .DS_Store
 .reasonix/
+# 测试目录只留本地，不随仓库分发（夹具里有假密钥字面量；本地跑 pytest 不受影响）
+tests/

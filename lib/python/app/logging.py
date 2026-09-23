@@ -5,6 +5,14 @@ import logging
 import sys
 from datetime import datetime, timezone
 
+# Everything a bare LogRecord already carries, plus the two attributes
+# Formatter injects. Anything else on a record came from `extra=` and is
+# telemetry we must not silently drop.
+_RESERVED = frozenset(vars(logging.LogRecord("", 0, "", 0, "", (), None))) | {
+    "message",
+    "asctime",
+}
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -15,23 +23,15 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
 
-        for key in (
-            "trace_id",
-            "duration_ms",
-            "status_code",
-            "error_code",
-            "event",
-            "request_summary",
-            "response_summary",
-        ):
-            value = getattr(record, key, None)
-            if value is not None:
-                payload[key] = value
+        for key, value in record.__dict__.items():
+            if key in _RESERVED or key.startswith("_") or value is None:
+                continue
+            payload[key] = value
 
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
 
-        return json.dumps(payload, ensure_ascii=False)
+        return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 def setup_logging(level: str) -> None:

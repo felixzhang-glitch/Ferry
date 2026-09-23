@@ -260,6 +260,7 @@ async def push_file(request: Request) -> JSONResponse:
 @app.on_event("startup")
 async def startup_event() -> None:
     memory.ensure_workspace(settings)
+    await agent_client.start()
     await reminder_scheduler.start()
     await daily_scheduler.start()
     loop = asyncio.get_running_loop()

@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""知乎热榜读取，带本地缓存与限流回退。
+
+存在理由：模型遇到热榜限流（`{"Code":30001,"Message":"rate limit exceeded"}`，
+且 CLI 退出码仍为 0）时，会在 bash 里 `sleep 45; zhihu-cli hot` 硬等重试。
+实测 5 次这样的 sleep 共吃掉 232s，占全部工具时长 77%，还全程独占一个常驻
+pi worker（池只有 2 个）。本脚本把「等」换成「用上次的结果」：
+
+- TTL 内命中缓存：不打接口，直接返回并标注抓取时间
+- 未命中：实拉一次，成功即写缓存
+- 限流或任何失败：返回上次缓存并标注抓取时间与失败原因；无缓存才报错
+- 任何情况下都不 sleep、不重试
+
+用法: bin/zhihu-hot [--limit N] [其它 zhihu-cli hot 参数]
+环境变量: ZHIHU_CLI_BIN / ZHIHU_HOT_CACHE_DIR / ZHIHU_HOT_TTL_SECONDS(默认 300)
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+CLI = os.environ.get("ZHIHU_CLI_BIN", "/root/.local/share/zhihu-cli/current/zhihu-cli")
+CACHE_DIR = Path(os.environ.get("ZHIHU_HOT_CACHE_DIR") or (ROOT / "runtime" / "cache"))
+TTL = float(os.environ.get("ZHIHU_HOT_TTL_SECONDS", "300"))
+CLI_TIMEOUT = float(os.environ.get("ZHIHU_HOT_CLI_TIMEOUT", "60"))
+
+
+def _stamp(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _age(path: Path) -> int:
+    return int(time.time() - path.stat().st_mtime)
+
+
+def _is_error(payload: str) -> bool:
+    """zhihu-cli exits 0 even when the API rejects the call, so the body decides."""
+    text = payload.strip()
+    if not text:
+        return True
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return False  # 非 JSON 的文本输出原样交给调用方判断
+    if isinstance(data, dict):
+        return bool(data.get("Code", data.get("code", 0)))
+    return False
+
+
+def _fallback(path: Path, reason: str) -> int:
+    if path.is_file():
+        print(f"[zhihu-hot 回退缓存 · {reason} · 数据抓于 {_stamp(path)}（{_age(path)}s 前）]")
+        print(path.read_text(encoding="utf-8"))
+        print(
+            "提示: 不要 sleep 重试，直接用上面的缓存数据，并在回复里注明抓取时间。",
+            file=sys.stderr,
+        )
+        return 0
+    print(f"[zhihu-hot 无缓存可用] {reason}", file=sys.stderr)
+    return 1
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    digest = hashlib.sha1(" ".join(args).encode("utf-8")).hexdigest()[:16]
+    path = CACHE_DIR / f"zhihu-hot-{digest}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if path.is_file() and _age(path) < TTL:
+        print(f"[zhihu-hot 缓存命中 · 抓于 {_stamp(path)}（{_age(path)}s 前）· TTL {int(TTL)}s]")
+        print(path.read_text(encoding="utf-8"))
+        return 0
+
+    try:
+        proc = subprocess.run(
+            [CLI, "hot", *args], capture_output=True, text=True, timeout=CLI_TIMEOUT
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _fallback(path, f"调用失败: {exc}")
+
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode != 0 or _is_error(out):
+        return _fallback(path, f"接口失败(exit={proc.returncode}): {out.strip()[:200]}")
+
+    path.write_text(out, encoding="utf-8")
+    print(f"[zhihu-hot 实时抓取 · {_stamp(path)}]")
+    print(out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

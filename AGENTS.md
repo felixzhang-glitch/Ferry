@@ -11,7 +11,7 @@
 ### 常用命令
 
 - 运行：`./bin/server start`（首次启动引导配置飞书凭证）、`./bin/server stop|restart|status`
-- 测试：`cd conf && pytest -q`（配置在 `conf/pytest.ini`，pythonpath 指向 `lib/python`）
+- 测试：`cd conf && pytest -q`（配置在 `conf/pytest.ini`，pythonpath 指向 `lib/python`）；`tests/` 为本地目录，不入库
 - 依赖安装：`pip install -r conf/requirements.txt`
 
 ### 硬性约束
@@ -19,7 +19,7 @@
 - 个人项目简洁优先：单实例部署，文件持久化，不引入外部存储；代码改动优先验证现有测试通过
 - 迭代必须回归核心功能：每次迭代完成后对照 `docs/functional-tests.md` 验证，避免破坏已有功能
 - 每次需求变化（新功能 / 行为调整 / 缺陷修复）完成后，在 `docs/requirement-changes.md` 顶部追加一条记录（日期 + 需求内容 + 影响范围）
-- 不提交敏感信息：配置走 `conf/.env`（不入库，仅 `.env.example`），`rules/admin.md` 保持 gitignored；推送 GitHub 前走 pre-push 密钥扫描钩子（`.qoder/hooks/`），注意脱敏
+- 不提交敏感信息：配置走 `conf/.env`（不入库，仅 `.env.example`；`.env` 的一切变体与时间戳备份同样不入库），`rules/admin.md`、`tests/`、`logs/`、`runtime/`、`memory/`（除 `README.md`）保持 gitignored；推送 GitHub 前走 pre-push 密钥扫描钩子（`.qoder/hooks/`）与 `git-push` skill 的 `preflight.py` 闸门，确认误报的白名单写在 `.git-push-allowlist.txt`
 
 ## 代码地图
 
