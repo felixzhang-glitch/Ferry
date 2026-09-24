@@ -3,6 +3,42 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-09-24 · GitHub 提交前隐私脱敏
+
+- 需求：检查数据并脱敏后推送 GitHub，仅发布代码、无凭证配置模板和可公开的功能/测试记录
+- 改动：公开 README 与运维文档改用保留示例域名，删除变更记录中的真实会话数量、Token 分项、活跃日期、缓存率和部分历史运行 PID；保留实现口径与核验结论。Supervisor 配置明确标注为需替换安装路径/账号的模板
+- 边界：真实凭证、会话及用量账本、截图、核验结果、日志和本地测试继续留在 gitignored 目录；不修改线上密码、用量记录、代理和监听，不重写已发布 Git 历史
+- 闸门：提交前核查暂存区隐私路径、当前凭证匹配及仓库扫描器；推送前逐提交预检并保留 pre-push 钩子，不使用强推或跳过检查
+
+## 2026-09-24 · pi 全历史 Token 看板（对齐 dsh-panel）
+
+- 需求：参考 `dsh-panel` 的 Token 消耗页，只收集 pi，并加入历史。已先核对参考源码并输出方案，再改造；参考仓库未改动
+- 页面：将现有「用量」升级为独立 Token 页，含 7/14/30/90 天、自定义及全部历史、6 项概览、输入/缓存读/缓存写/输出、独立 180/365 天热力图、Top5+其他模型堆叠日趋势与缓存率、环图、排名及模型明细。UTC+8 日界，保留缺失与零差异，日期/刷新竞态隔离，不受 Ferry 运行筛选误导，不与运行事件 Token 相加
+- 数据：新增 `observability/pi_usage.py` 与 `usage_cli.py`，只读 pi 原生 assistant usage、compaction usage、branch_summary usage；全量初导后按 stat/ctime 检查变化文件。总量按 input+cacheRead+cacheWrite+output，reasoning 已含 output；缓存读取率 cacheRead/(input+cacheRead)，费用不估算。原生 user 回合关联，工具循环不重复计轮次；上下文维护计消耗但不增加用户轮次
+- 持久化：独立 `runtime/observability/pi-usage/index.json`（目录0700/文件0600，gitignored），不受运行日志30天或200000条上限影响。跨进程 flock、原子 fsync、v1→v2 保留归档迁移；HMAC 原来源与多身份别名去重，缺usage副本不清零、旧fork不回滚原来源修正，源删后保留历史；缓存损坏且源也已删除仍有不可恢复边界
+- 接口与运维：`GET /api/observability/v1/usage?range=all`（custom 带 start/end，refresh=1 后台单飞），`schema` 补口径，`/metrics` 增独立历史 gauges。`server obs sync` 手动同步，Web进程后台每30秒检查；沿用38080/Nginx/密码及只读Token，无需变更模型主链路。仅重启观测进程；主服务和微信 PID 未变
+- 历史核对：已使用独立原生元数据脚本与 HTTPS API 逐项核对会话、请求、轮次、活跃日、缓存率和 Token 分项，结果一致；升级账本后复核一致，重复同步不增加总量。真实数量、日期范围与用量仅保留在本机核验记录，不随公开仓库分发
+- 验证：最终Python **877 passed / 5 skipped**（跳过的是主Python环境无Playwright的5项浏览器用例，另在隔离浏览器环境运行全部**6项通过**）；Node22 **33 passed**。包括追加后台同步、手动刷新、重启保持、跨日/跨模型轮次、fork复制、等长改写、丢字段副本、缓存恢复、旧版本迁移及无正文白名单。真实HTTPS页面验收历史总量、日期、自定义、180/365热图、趋势/环图/排名、320px、同步与退出；JSON与Prometheus历史用量一致
+- 证据：`tests/audit_pi_usage.py` 为独立元数据核对；结果 `runtime/pi-usage-reconciliation.json`，截图 `runtime/pi-usage-desktop.png` / `pi-usage-mobile.png`，测试日志 `runtime/pi-usage-final-*-tests.log`。没有为了测试调用真实模型或向IM实发消息，不导入非pi历史，不保存prompt/content/思考/工具参数/路径
+
+## 2026-09-24 · 可观测开放监听与 Nginx HTTPS 代理
+
+- 需求：按用户要求改为监听 `0.0.0.0:38080`，检查并补齐 Nginx 对外代理；安全组由用户自行限制，不改安全组或防火墙
+- 配置：`conf/.env.observability` 的 HOST 改为 `0.0.0.0`、COOKIE_SECURE 改为 `true`；密码哈希、只读 Token、上报 Token、HMAC key 均保持不变。通过 `server obs restart` 生效，未重启主服务和微信
+- Nginx：新增 `conf/nginx-observability.locations.conf` 模板，由目标站点引入。复用既有 HTTPS 入口，代理页面、API、两份静态资源和 metrics 到 38080；内部上报路径对外 404，无关业务代理保持不变。配置和私有环境的回滚副本仅保留本地
+- 验证：`nginx -t` 通过后 reload；监听与代理链路检查通过，HTTPS 页面/静态资源 200，未认证 API/metrics 401，Secure/HttpOnly/SameSite Cookie、退出失效和只读 Token 验证通过。桌面浏览器已验证目标 HTTPS 页面；全量 Python **801 passed**（4 项既有弃用警告）
+- 访问示例：`https://observability.example.com/observability`（替换为自己的域名），入口端口 443；38080 是后端 HTTP 端口，不用于发送明文网页登录密码。新增子路径主页链接和代理路由回归，原有业务路由未替换
+
+## 2026-09-24 · 私有可观测模块（38080 / 密码登录 / LLM 指标 / Supervisor）
+
+- 需求：统计会话轮次、响应、尝试、Token、工具、队列与渠道结果，不展示聊天内容；独立 Web 38080，统一 server 脚本和 Supervisor 管理，随机生成私人登录凭证
+- 实现：新增 `lib/python/observability/`，白名单事件经 4096 条有界后台队列写本地 JSONL，默认保留 30 天；增量读端提供总览、趋势、分组、最近轮次、schema 和 Prometheus。主服务采样资源、worker、任务与队列；两渠道、pi 统一解析器、定时任务接入埋点；微信 sidecar 回传无正文发送结果
+- 口径：内部随机轮次 ID 与微信 transport 一次性关联；重试不重复计轮次，失败用量保留，无终态 usage 的尝试计缺口。模型筛选关联轮次阶段、Token 仅计目标模型。辅助传输与回发、定时生成与单次 agent 耗时分开；跨 Task 流式消费不跨上下文复用 ContextVar token
+- 安全：默认 `127.0.0.1:38080`，未开放公网；scrypt 密码哈希、24h 服务端 Session、限流与 Origin 校验；只读 Token 与本机上报写 Token 分离。私有配置 `conf/.env.observability` 权限 0600、gitignored；明文密码不落盘，不传观测认证变量到 pi worker
+- 管理：新增独立 Supervisor program `ferry-observability`、`bin/run-observability` 及配置模板；`bin/server` 真正代理全栈与 obs/wx 的管理命令，支持一次性凭证初始化。已通过统一 `server restart` 加载变更，三个程序 RUNNING，8080 与 38080 健康检查通过；原主服务和微信端口不变
+- 验证：最终全量 Python **785 passed**（4 项既有 FastAPI on_event 弃用警告），Node 22 **33 passed**。实际 API 验证未认证 401、密码/Cookie/只读 Token、退出失效、读 Token 无法上报；系统 Chromium 验证登录退出、五页签、320px 无横向溢出、无 JS 错误和浏览器持久化凭证。截图在 gitignored runtime；未向真实 IM 实发测试消息或发起真实模型测试调用
+- 边界：仅采集启用后的数据，不导入聊天历史；无 180 天聚合、费用估算、缓存计费、已读、渠道连接心跳或首段正文回发指标。读端最多 200000 条缓存，上限/丢弃/落盘异常提示不完整；不承诺崩溃零丢失，Prometheus counter 随生产进程重启归零。既有业务日志/pi transcript 不在本次正文裁剪范围
+
 ## 2026-09-23 · 推送前隐私闸门收口（.env 变体不入库 / tests 停止分发 / 误报白名单）
 
 - **需求**：接入通用 `git-push` skill（真身 `~/.codex/skills/git-push/`，经 `~/.agent/skills/git-push` 符号链接进 omp 的唯一 skills 根；闸门脚本 `scripts/preflight.py`）后，处理它在本仓查出的三项：① `.env` 时间戳备份未被忽略，一次 `git add -A` 就会把真密钥推上公开仓；② `memory/README.md` 只是目录说明、无隐私数据，应正常分发且不再告警；③ 测试文件后续不再推送（用户确认范围为整个 `tests/`）
@@ -26,7 +62,7 @@
 ## 2026-09-22 · 延迟四项优化 + 观测缺口修复（首字前进度 / 限流不 sleep / 往返合并 / 超时收敛）
 
 - **需求**：先分析近期会话定位耗时，再对 ①首字前静默 ②限流 sleep 退避 ③模型往返次数 ④超时上限 逐项优化，并补齐正在阻碍优化的观测缺口
-- **定位（实测，`logs/ferry.log` 194 轮 + 8 个 pi transcript 重建 50 轮）**：pi 调用占总时长 ≈98%；轮内 model 82% / tool 18%；`worker setup` p50 96ms（占轮时 0.1–0.7%，09-21 那次优化已榨干）；飞书出站残差 mean 749ms（≈2 个 HTTP RTT，已是下限）；前缀缓存正常（cacheRead 3.03M vs input 1.36M）。真正的四个洞：**首字前静默中位占轮时 77.4%**（24/43 轮 >50%，max 220s）；**工具总时长 300s 里 232s 是 5 次 `sleep 20..90` 限流退避（占 77%）**，直接造成最慢两轮 224s / 127s；**模型往返均值 3.08 次/轮**（p90 7 次，每次约 1.2s 固定开销）；**1 轮跑满 300s 才报超时**，另 2 轮 192s/155s 后被 provider 内容审核打断，共 647s 白等
+- **定位**：依据本地运行日志和原生事件发现首字前等待、工具退避、模型往返和超时预算是主要延迟来源。真实样本量、时段分布和用量统计不在公开文档保存；下面保留改进方案与验证方法
 - **观测缺口修复**：
   - `app/logging.py`：删掉硬编码 extra 白名单，改收 record 上所有非 `LogRecord` 内置字段（`json.dumps(default=str)` 兜底）。此前 `backend`、`feishu_stream_updates`、`feishu_streamed` 一直被静默丢弃——37 条 `pipeline.streaming` 无一能看出流式是否生效
   - `channel/feishu/client.py`：四个传输助手（`_post_authenticated_json` / `_post_authenticated_multipart` / `_get_authenticated_bytes` / `_post_json_with_retries`）在成功返回前统一打点 `duration_ms` + `attempt`，删掉 10 处各方法重复的成功日志；`update_markdown_card` 此前成功路径零日志（全日志 `feishu.update_card` 出现 0 次），现在自动获得打点。`upload_file` 的 `file_type`/`size` 经新增 `log_extra` 保留
@@ -38,7 +74,7 @@
 - **影响范围**：`app/logging.py`、`channel/feishu/{client.py,handler.py}`、`core/agent/{pi_cli.py,types.py}`、`app/config.py`、`conf/.env`、`conf/.env.example`、`rules/system.md`、新增 `bin/zhihu-hot`、Python 测试与 6 份文档。`channel/wechat/`、`lib/js/`、会话映射、记忆、队列、定时任务一行未改
 - **边界**：微信通道无卡片可编辑，不接进度（否则会变成刷屏）；`FEISHU_STREAMING_EDIT=false` 仍可一键回退整段发送；`PI_PERSISTENT_ENABLED=false` 仍可回退逐轮 CLI；模型、thinking、cwd、transcript 均未动
 - **验证**：全量 `cd conf && pytest -q` → **582 passed**（基线 577，新增 5 条：`_tool_execution` 用真实 pi 载荷解码、占位卡先于首字并渲染工具进度、`update_markdown_card` 必须走 PATCH 而非新建消息、formatter 保留任意 extra、formatter 序列化非 JSON 值）；JS 侧用 `PI_NODE_BIN` 的 22.23.2 跑 `pi-worker.test.mjs` + `wechat-sidecar.test.mjs` → **33 passed**（默认 PATH 的 20.19.4 会因 undici 缺 `markAsUncloneable` 失败 10/14，已在 `docs/functional-tests.md` 写明）。真实 pi + 真实 `PiCliClient`/worker 池 + 真实 handler + 记录型 feishu client 冒烟两次：第一次抓到 `pi.tool_call`(elapsed_ms 1662)、`pi.tool_result`(duration_ms 4039, is_error false)、`pi.stream` 带 `backend`、`pipeline.streaming` 带 `feishu_stream_updates:5 / feishu_streamed:true`，同时暴露占位卡带前导 `\n\n` 的缺陷；修复后第二次卡片序列为 `1ms CREATE "> 🌿 正在处理…"` → `1685ms UPDATE "> 🔧 bash · echo smoke-start; sleep 4; echo smoke-end"` → `5809ms UPDATE` 工具结束回占位 → `6621/6660ms UPDATE` 正文与定稿，footer 已清空。`bin/zhihu-hot` 三条路径实测：无缓存+限流 exit 1 并明示原因、10 分钟前缓存+限流回退 exit 0 标注 600s 前、TTL 内命中 0.336s 完全不打接口
-- **生效**：`supervisorctl restart ferry-stack:ferry`，新主进程 3693100，worker 3693155(3270ms)/3693183(3922ms) 预热完成，飞书 WS 重连，`/healthz` ok，进程环境确认 `PI_TIMEOUT_SECONDS=180`、`PI_IDLE_TIMEOUT_SECONDS=120`、`PI_MODEL=deepseek/deepseek-flash`；微信 sidecar 2987879 未重启；重启窗口无 ERROR/WARNING。**未向真实 IM 会话发消息**，飞书卡片进度的实际视觉效果需用户端肉眼确认
+- **生效**：已重启主服务并验证 worker 预热、飞书 WS 重连、健康检查及超时配置；微信 sidecar 未重启。真实 PID、启动计时和进程配置快照仅保留本地。未向真实 IM 会话发消息，飞书卡片进度的实际视觉效果需用户端确认
 
 ## 2026-09-22 · 切换到 DeepSeek 官方 deepseek-flash（新增 deepseek provider）
 
@@ -50,7 +86,7 @@
   - `conf/.env.example`、`docs/references/pi-cli.txt`（配置表 + DeepSeek 注册小节 + 推理强度差异说明）、`docs/routing.md` 凭证说明
 - **边界**：百炼 provider 与 `bailian/*` 三个模型条目原样保留；回退只需 `PI_MODEL=bailian/qwen3.8-flash`（`PI_THINKING` 按需回 medium）+ 重启。渠道、会话、记忆、队列与业务规则代码未动
 - **验证**：全量 `cd conf && pytest -q` → 577 passed；`sync_pi_models` 实跑同步成功且无未注册告警，`PI_OFFLINE=1 pi --list-models deepseek` 显示 `deepseek-flash` 1M/16.4K/thinking yes/images yes（内置两条并列）；隔离 agent dir + 本地 HTTP mock 抓到 pi 真实请求体：`model=deepseek-flash`、`reasoning_effort=low`、`thinking={"type":"enabled"}`、`max_tokens=16384`（无 `max_completion_tokens`）、角色仅 system/user、路径 `<baseUrl>/chat/completions`、图片以 `image_url` data URL 传入；真实 API 经生产 `PiCliClient`（常驻 worker）三轮：文本答「在线」、蓝色图答「蓝色」、同 session_key 续接答「在线」。证据 `runtime/deepseek-switch-verification.json`
-- **生效**：`supervisorctl restart ferry-stack:ferry`，主进程 3667854、worker 3667902/3667931 均确认 `PI_MODEL=deepseek/deepseek-flash`、`PI_THINKING=low`、`DEEPSEEK_API_KEY` 就位，pi 0.84.2 双 worker 预热完成、飞书 WS 重连、`/healthz` ok、重启后无 WARN/ERROR；微信 sidecar 2987879 未重启。未做真实 IM 客户端实发
+- **生效**：已重启主服务并确认模型配置加载、双 worker 预热、飞书 WS 重连和健康检查；真实 PID 与进程配置快照仅保留本地，微信 sidecar 未重启。未做真实 IM 客户端实发
 
 ## 2026-09-22 · 飞书回复改为渐进式流式（微信不动）
 

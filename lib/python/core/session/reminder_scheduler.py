@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from observability.telemetry import emit
+
 logger = logging.getLogger(__name__)
 
 ReminderCallback = Callable[[str, str, str], Awaitable[None]]
@@ -84,7 +86,18 @@ class ReminderScheduler:
         try:
             await asyncio.sleep(max(0.0, reminder.due_at - time.time()))
             trace_id = f"reminder-{reminder.reminder_id}"
-            await self._callback(reminder.chat_id, reminder.text, trace_id)
+            delivery_started = time.monotonic()
+            delivery_status = "error"
+            try:
+                await self._callback(reminder.chat_id, reminder.text, trace_id)
+                delivery_status = "success"
+            except asyncio.CancelledError:
+                delivery_status = "cancelled"
+                raise
+            finally:
+                emit("task", channel="feishu", source="scheduled", operation="reminder",
+                     stage="task_delivery", status=delivery_status, count=1,
+                     duration_seconds=time.monotonic() - delivery_started)
             remove_on_exit = True
             logger.info(
                 "reminder delivered",

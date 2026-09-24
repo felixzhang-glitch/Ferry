@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Foreground runner for Supervisor and local PID management; no pi startup/sync.
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+# shellcheck disable=SC1091
+source "$ROOT_DIR/bin/server"
+# Uses load_env unchanged, then applies only observability-specific overrides.
+load_observability_env
+
+exec "$(env_python)" -m uvicorn observability.web:app \
+  --host "${OBSERVABILITY_HOST:-127.0.0.1}" --port "${OBSERVABILITY_PORT:-38080}" \
+  --no-proxy-headers

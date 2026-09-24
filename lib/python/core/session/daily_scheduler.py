@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from observability.telemetry import emit, observe_run, set_status
+
 logger = logging.getLogger(__name__)
 
 # (channel, target_id, text, trace_id) -> None
@@ -118,39 +120,66 @@ class DailyTaskScheduler:
                 extra={"trace_id": task.task_id, "event": "daily.loop_error"},
             )
 
+    @observe_run(channel="scheduled")
     async def _execute(self, task: DailyTask) -> None:
         today = self._today()
         trace_id = f"daily-{task.task_id[:8]}-{today}"
         session_key = f"daily:{task.task_id}:{today}"
 
         answer = ""
-        for attempt in range(2):
-            try:
-                answer = (await self._run_callback(task.prompt, session_key, trace_id)).strip()
-                if answer:
-                    break
-            except Exception:
-                logger.exception(
-                    "daily task run failed",
-                    extra={"trace_id": trace_id, "event": "daily.run_error"},
-                )
-            if attempt == 0:
-                await asyncio.sleep(5.0)
+        generation_started = time.monotonic()
+        generation_status = "error"
+        try:
+            for attempt in range(2):
+                try:
+                    answer = (await self._run_callback(task.prompt, session_key, trace_id)).strip()
+                    if answer:
+                        generation_status = "success"
+                        break
+                except Exception:
+                    logger.exception(
+                        "daily task run failed",
+                        extra={"trace_id": trace_id, "event": "daily.run_error"},
+                    )
+                if attempt == 0:
+                    await asyncio.sleep(5.0)
+        except asyncio.CancelledError:
+            generation_status = "cancelled"
+            raise
+        finally:
+            emit("task", channel=task.channel, source="scheduled", operation="daily",
+                 stage="task_generation", status=generation_status, count=1,
+                 duration_seconds=time.monotonic() - generation_started)
 
         if not answer:
+            set_status("error")
             answer = f"简报生成失败（任务 {task.task_id[:8]}），请检查服务日志。"
 
+        delivery_started = time.monotonic()
+        delivery_status = "error"
         try:
             await self._push_callback(task.channel, task.target_id, answer, trace_id)
+            delivery_status = "success"
+            # Delivering an error notice must not turn failed generation green.
+            if generation_status == "success":
+                set_status("success")
             logger.info(
                 "daily task delivered",
                 extra={"trace_id": trace_id, "event": "daily.delivered"},
             )
+        except asyncio.CancelledError:
+            delivery_status = "cancelled"
+            raise
         except Exception:
+            set_status("error")
             logger.exception(
                 "daily task push failed",
                 extra={"trace_id": trace_id, "event": "daily.push_error"},
             )
+        finally:
+            emit("task", channel=task.channel, source="scheduled", operation="daily",
+                 stage="task_delivery", status=delivery_status, count=1,
+                 duration_seconds=time.monotonic() - delivery_started)
 
         task.last_run_date = today
         async with self._lock:

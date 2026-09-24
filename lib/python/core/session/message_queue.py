@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from observability.telemetry import emit
+
 logger = logging.getLogger(__name__)
+
+
+def _channel(session_key: str) -> str:
+    return "wechat" if session_key.startswith("wechat:") else "feishu"
 
 
 @dataclass(slots=True)
@@ -44,10 +51,12 @@ class SessionMessageQueue:
 
             pending = state.queue.qsize()
             if pending >= self._max_pending:
+                emit("queue", channel=_channel(session_key), status="rejected", count=1)
                 return QueueStatus(accepted=False)
 
             position = pending + (1 if state.running else 0)
-            state.queue.put_nowait((job, on_drop))
+            state.queue.put_nowait((job, on_drop, time.monotonic()))
+            emit("queue", channel=_channel(session_key), status="accepted", count=1)
             if state.worker is None or state.worker.done():
                 state.worker = asyncio.create_task(self._drain(session_key, state))
         return QueueStatus(accepted=True, position=position)
@@ -61,7 +70,8 @@ class SessionMessageQueue:
             dropped = 0
             while not state.queue.empty():
                 try:
-                    _job, on_drop = state.queue.get_nowait()
+                    # Accept legacy two-item entries used by queue integrations.
+                    _job, on_drop, *_timing = state.queue.get_nowait()
                     state.queue.task_done()
                     dropped += 1
                 except asyncio.QueueEmpty:
@@ -71,6 +81,8 @@ class SessionMessageQueue:
                         on_drop()
                     except Exception:
                         logger.exception("queue on_drop callback failed", extra={"event": "queue.drop_error"})
+            if dropped:
+                emit("queue", channel=_channel(session_key), status="dropped", count=dropped)
             return dropped
 
     def pending_count(self, session_key: str) -> int:
@@ -91,7 +103,7 @@ class SessionMessageQueue:
     async def _drain(self, session_key: str, state: _SessionQueue) -> None:
         while True:
             try:
-                job, _on_drop = state.queue.get_nowait()
+                job, _on_drop, *timing = state.queue.get_nowait()
             except asyncio.QueueEmpty:
                 async with self._lock:
                     if state.queue.empty():
@@ -99,6 +111,9 @@ class SessionMessageQueue:
                         return
                 continue
 
+            if timing:
+                emit("stage", channel=_channel(session_key), stage="queue_wait",
+                     status="success", duration_seconds=max(0.0, time.monotonic() - timing[0]))
             state.running = True
             try:
                 await job()

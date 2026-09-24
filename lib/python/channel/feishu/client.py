@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import mimetypes
+from functools import wraps
 from pathlib import Path
 import time
 from typing import Any
@@ -12,6 +13,7 @@ import httpx
 
 from app.config import Settings
 from channel.feishu.formatting import build_markdown_card
+from observability.telemetry import emit
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,55 @@ DEFAULT_FILE_TYPE = "stream"
 
 def resolve_feishu_file_type(file_name: str) -> str:
     return FILE_TYPE_BY_SUFFIX.get(Path(file_name).suffix.lower(), DEFAULT_FILE_TYPE)
+
+
+_DELIVERY_OPERATIONS = {
+    "feishu.reply": "reply",
+    "feishu.reply_image": "reply",
+    "feishu.reply_markdown": "card_create",
+    "feishu.send_markdown": "card_create",
+    "feishu.update_card": "card_update",
+    "feishu.send": "send",
+    "feishu.send_image": "send",
+    "feishu.send_file": "send",
+    "feishu.upload_image": "upload",
+    "feishu.upload_file": "upload",
+    "feishu.download_image": "download",
+    "feishu.download_file": "download",
+}
+
+
+def _observe_transport(event_position: int = 3):
+    """One platform result per helper call, including all transport retries.
+
+    Only the four HTTP helpers are wrapped, never their public callers. A
+    successful PATCH is a card_update, not another conversational turn.
+    """
+    def decorate(func):
+        @wraps(func)
+        async def wrapped(self, *args, **kwargs):
+            event = kwargs.get("event", args[event_position] if len(args) > event_position else "")
+            operation = _DELIVERY_OPERATIONS.get(event, "other")
+            started = time.monotonic()
+            status = "error"
+            try:
+                result = await func(self, *args, **kwargs)
+                # JSON helpers return API codes; the download helper has
+                # already checked HTTP status and returns a content type.
+                data = result[1]
+                if not isinstance(data, dict) or data.get("code") == 0:
+                    status = "success"
+                return result
+            except asyncio.CancelledError:
+                status = "cancelled"
+                raise
+            finally:
+                delivery = operation in {"reply", "card_create", "card_update", "send"}
+                emit("delivery" if delivery else "transport", channel="feishu", operation=operation,
+                     stage="delivery" if delivery else "channel_io",
+                     status=status, count=1, duration_seconds=time.monotonic() - started)
+        return wrapped
+    return decorate
 
 
 class FeishuClient:
@@ -602,6 +653,7 @@ class FeishuClient:
             fields.update(extra)
         logger.info("feishu request completed", extra=fields)
 
+    @_observe_transport()
     async def _post_authenticated_json(
         self,
         url: str,
@@ -677,6 +729,7 @@ class FeishuClient:
 
         raise FeishuClientError(f"feishu request failed: {last_error}")
 
+    @_observe_transport(event_position=4)
     async def _post_authenticated_multipart(
         self,
         url: str,
@@ -745,6 +798,7 @@ class FeishuClient:
 
         raise FeishuClientError(f"feishu request failed: {last_error}")
 
+    @_observe_transport()
     async def _get_authenticated_bytes(
         self,
         url: str,
@@ -805,6 +859,7 @@ class FeishuClient:
 
         raise FeishuClientError(f"feishu request failed: {last_error}")
 
+    @_observe_transport()
     async def _post_json_with_retries(
         self,
         url: str,

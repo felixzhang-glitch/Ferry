@@ -8,9 +8,32 @@
 
 ## 监控与告警
 
-- 健康检查：`./bin/server status`
-- 日志：`logs/`（不入库）；异常可通过渠道回复和 pi 事件日志排查，避免输出凭证与文件解密密钥
-- 告警阈值与自动备份：待补充，当前无服务级可用性保证
+- 健康检查：`./bin/server status`；可观测独立进程 `./bin/server obs status`，Supervisor 名称 `ferry-observability`，主服务仍为 `ferry-stack:ferry`
+- Web：对外部署地址示例为 `https://observability.example.com/observability`（替换为自己的域名，443），后端可监听 `0.0.0.0:38080`；访问控制由安全组和应用鉴权共同承担。HTTPS 部署应设 `OBSERVABILITY_COOKIE_SECURE=true`；不要用裸 HTTP 38080 登录
+- Nginx：在目标站点配置（例如 `/etc/nginx/conf.d/observability.conf`）引入 `/etc/nginx/snippets/ferry-observability.conf`，模板为 `conf/nginx-observability.locations.conf`；仅代理观测页面、`/api/observability/v1/*`、两份静态资源及 `/metrics` 到 `127.0.0.1:38080`，`/internal/observability/` 对外返回 404。保留既有 HTTPS 入口及无关业务路由。修改后先 `nginx -t`，再 `nginx -s reload`
+- 新部署默认值仍为回环监听；如果仅使用 SSH 隧道，可配置 `OBSERVABILITY_HOST=127.0.0.1`、`OBSERVABILITY_COOKIE_SECURE=false`，通过 `ssh -N -L 38080:127.0.0.1:38080 <服务器>` 在本机打开。已有凭证不会因监听切换被重新生成
+- 凭证初始化：`./bin/server obs credentials`，仅首次显示随机密码与只读 Token，密码仅保存 scrypt 哈希；私有配置 `conf/.env.observability`（0600、gitignored），已有文件不覆盖。主服务和观测服务均读取该配置，配置变更后需重启对应进程
+- 托管配置：`conf/supervisor-observability.conf` 为独立 program 模板，避免新增服务时更新既有组导致 IM 整组重启；安装到 Supervisor include 目录后 `supervisorctl reread && supervisorctl update ferry-observability`。日常统一使用 `./bin/server start|stop|restart|status` 或 `./bin/server obs start|stop|restart|status`
+- 机器读取：`GET /api/observability/v1/summary?window=24h`、`timeseries`、`breakdown`、`runs`、`schema` 与 `GET /metrics`；请求头 `Authorization: Bearer <独立只读Token>`。Web 使用单用户 Session；上报回执使用独立写 Token，只允许实际回环来源；不复用文件推送凭证
+- 采集：白名单事件单写入器、4096 条有界队列、本地 `runtime/observability/events-*.jsonl`；默认保留 30 天，读端增量缓存最多 200000 条，达到上限明确提示不完整。该限制仅针对运行事件；pi 历史用量走下述独立账本，不导入聊天正文
+- 可靠性：写盘失败或缓冲溢出不阻断 IM；尚未落盘的事件在异常退出时可能丢失。未闭合轮次显示运行中或未知，不补成成功。心跳超过 15 秒显示过期；`/healthz` 只说明观测 HTTP 存活，不能代表模型或渠道健康
+- 运行事件统计边界：业务轮次、pi 尝试、可见模型响应、工具和渠道操作分开；Token 只累计可见 `assistant message_end.usage`，不重复累计 `agent_end`，缓存计费、隐藏压缩/HTTP 重试用量及费用未验证。回发成功只表示平台接受；首段文本不是供应商首 Token，pipeline 不含队列等待。分位数对保留样本计算，不能平均多个 P95；Prometheus counter 按生产进程生命周期累计，重启归零，历史查询不回填 counter
+- 隐私：不采集聊天、思考、工具参数/结果、文件名/路径、原始报错；会话仅 HMAC 去标识化且不作 Prometheus 标签。既有业务日志和 pi transcript 的保存行为不变，不承诺整个系统不存正文
+- 日志：`logs/`（不入库）；观测进程 `logs/observability.log`，异常排查避免输出凭证和解密密钥
+- 告警通知、价格表与自动备份：尚未提供；当前无服务级可用性保证
+
+## pi 历史 Token 用量
+
+- 范围：仅 pi 原生 JSONL；`OBSERVABILITY_PI_USAGE_ENABLED=true` 开启，`OBSERVABILITY_PI_SESSION_DIRS` 为可选 JSON 目录数组（最多 16 个，禁止空路径），默认 `PI_CODING_AGENT_DIR/sessions` 或 `~/.pi/agent/sessions`。不扫描其他 Agent 数据，不调用模型，也不改变原生会话
+- 同步：首次全量，随后按 inode/size/mtime/ctime 检查变化文件，默认每 30 秒；`./bin/server obs sync` 手动同步。Web 和 CLI 通过文件锁串行、持锁后加载最新 checkpoint，查询使用最后完成快照，避免慢扫描阻塞页面
+- 账本：`runtime/observability/pi-usage/index.json`（0600，目录0700），只保存数字、模型、日期和 HMAC 标识；v2 checkpoint 兼容迁移 v1，原子替换并 fsync。历史不受运行事件的 30 天/200000 条限制，源文件删除后仍保留已采集用量；缓存损坏且源也已删除时无法重建该部分历史，应备份账本
+- 去重：优先原生记录 ID + 时间 + 类型，缺 ID 时使用响应元数据，再缺则源文件哈希与偏移并标弱身份。HMAC 身份别名关联不同时间字段或缺 envelope 的同一记录；首次观察来源负责已知字段修正，副本仅补缺，避免缺 usage 副本清零或旧副本回滚。fork 复制和重复同步不重复加账；用户回合沿 parentId 树关联，工具循环/模型多次响应不增加用户轮次，不按可能跨目录复用的 session ID 粗暴合并
+- 口径：`in` 未缓存输入、`cr` 缓存读、`cw` 缓存写、`out` 输出；总量为四项之和。`reason` 已含在输出中，不再相加；上报 totalTokens 不一致时告警。缓存读取率为 `cr/(in+cr)`（与参考一致，无分母为 null）。零 usage 保留，缺字段不当完整零值，费用字段不用于估价
+- 请求：`req` 是唯一有 usage 的记录数，不是供应商 HTTP 次数；含 `assistantReq` 与 `compactionReq`（上下文压缩和分支摘要）。摘要请求增加用量但不增加用户轮次；无法关联用户的用量保留并标明轮次未知。总轮次独立去重，不相加跨日或跨模型的局部轮次
+- 页面：7/14/30/90天、自定义（最多十年）、全部历史；概览、180/365天热力图、模型堆叠日趋势和缓存率、Top5+其他环图/排名/分项表。日界统一 Asia/Shanghai。热力图独立于主日期筛选；采集质量针对全部扫描历史，尚未采集与失败不能伪装正常零值
+- API：`GET /api/observability/v1/usage?range=all`；custom 带 `start=YYYY-MM-DD&end=YYYY-MM-DD`，两端包含。`refresh=1` 请求后台同步，单飞且最小间隔 5 秒；沿用现有密码/Cookie/只读 Token，不能修改会话。`generatedAt/lastScanAt` 使用 Unix 毫秒，与运行接口的秒区分
+- Metrics：`ferry_pi_usage_history_tokens{type="in|cr|cw|out|reason|total"}`、history_requests、history_sessions 以及 scan/quality gauges；它们是历史快照，不与进程 `ferry_tokens_total` 相加，不假装累计 counter。导出器失败不影响运行指标导出
+- 核对：显式运行 `PYTHONPATH=lib/python .venv/bin/python tests/audit_pi_usage.py`，独立读取源元数据并与在线 API 对账；结果默认 `runtime/pi-usage-reconciliation.json`。测试脚本不写原生历史、不会实发消息
 
 ## 故障处理
 

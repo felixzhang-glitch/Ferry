@@ -110,6 +110,31 @@ curl --fail http://127.0.0.1:8080/healthz
 
 > `/healthz` 只证明 HTTP 服务活着，不代表模型调用或渠道收发已验证
 
+### 私有可观测看板
+
+独立服务默认 `127.0.0.1:38080/observability`，只展示轮次、响应耗时、Token、工具与回发结果，不展示聊天内容。单用户密码登录；LLM 可使用独立只读 Token 读取 JSON API 或 `/metrics`
+
+```bash
+./bin/server obs credentials   # 首次生成私有配置，显示随机密码；已有凭证不覆盖
+./bin/server obs start
+./bin/server obs status
+# 远程访问：在自己的电脑执行
+ssh -N -L 38080:127.0.0.1:38080 <服务器>
+```
+
+对外部署地址示例为 `https://observability.example.com/observability`（替换为自己的域名），后端可监听 `0.0.0.0:38080`，使用 Secure Cookie。上面的 SSH 方式适用于回环监听且关闭 Secure Cookie 的私有部署。Supervisor/Nginx 安装、接口、数据保留与完整性限制见 [运维说明](docs/RELIABILITY.md)。主服务运行指标从启用后开始；「Token 用量」另从 pi 原生历史只读采集用量元数据，不复制正文。凭证只存 `conf/.env.observability`，不入库、不提供默认密码
+
+Token 用量参考 `dsh-panel`：支持 7/14/30/90 天、自定义和全部历史，180/365 天热力图、模型堆叠趋势、缓存读取率、Top 5 分布与排名。只采集 pi，不叠加 Ferry 实时 Token 埋点
+
+```bash
+# 在 conf/.env.observability 开启 OBSERVABILITY_PI_USAGE_ENABLED=true
+# 可选 OBSERVABILITY_PI_SESSION_DIRS 为 JSON 数组；默认使用 pi agent 目录的 sessions
+./bin/server obs sync       # 首次导入或手动增量同步，重复执行不会重复计数
+./bin/server obs restart    # 启动后台持续同步，默认每 30 秒检查变化文件
+```
+
+机器读取：`GET /api/observability/v1/usage?range=all`，同一只读 Token；全部历史保存在独立账本，不受运行事件 30 天保留期限制。压缩/分支摘要用量一并纳入，费用不估算
+
 ## 对话命令
 
 | 命令 | 行为 |

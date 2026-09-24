@@ -11,29 +11,37 @@ LOG_DIR="$ROOT_DIR/logs"
 RUNTIME_DIR="$ROOT_DIR/runtime/server"
 APP_PID_FILE="$RUNTIME_DIR/ferry.pid"
 WECHAT_PID_FILE="$RUNTIME_DIR/wechat-sidecar.pid"
+OBSERVABILITY_PID_FILE="$RUNTIME_DIR/observability.pid"
 APP_LOG_FILE="$LOG_DIR/ferry.log"
 WECHAT_LOG_FILE="$LOG_DIR/wechat-sidecar.log"
+OBSERVABILITY_LOG_FILE="$LOG_DIR/observability.log"
+OBSERVABILITY_ENV_FILE="$CONF_DIR/.env.observability"
 PYTHONPATH_DIR="$ROOT_DIR/lib/python"
 WECHAT_SIDECAR="$ROOT_DIR/lib/js/wechat-sidecar.mjs"
 WECHAT_ACCOUNT_PATH_DEFAULT="$CONF_DIR/wechat/account.json"
 WECHAT_SYNC_BUF_PATH_DEFAULT="$ROOT_DIR/runtime/wechat/get_updates_buf.txt"
 SUPERVISOR_GROUP="ferry-stack"
+SUPERVISOR_OBSERVABILITY="ferry-observability"
 
 usage() {
   cat <<'USAGE'
 Usage:
-  ./bin/server start [-f|--foreground]   Start Ferry and WeChat sidecar when logged in
-  ./bin/server stop                      Stop Ferry and WeChat sidecar
+  ./bin/server start [-f|--foreground]   Start Ferry, logged-in WeChat and enabled observability
+  ./bin/server stop                      Stop all services
   ./bin/server restart [-f|--foreground] Restart services
   ./bin/server status                    Show service status
   ./bin/server wx login                  Scan QR code to login or refresh WeChat ClawBot
-  ./bin/server wx start                  Start only WeChat sidecar
-  ./bin/server wx stop                   Stop only WeChat sidecar
-  ./bin/server wx status                 Show WeChat sidecar status
+  ./bin/server wx start|stop|restart|status
+                                        Manage only WeChat sidecar
+  ./bin/server obs start|stop|restart|status
+                                        Manage only observability (default port 38080)
+  ./bin/server obs credentials [args...]  Run observability credential setup
+  ./bin/server obs sync                  Import/sync all configured pi usage history
   ./bin/server help                      Show this help
 
 Tips:
-  若项目由 supervisor 托管，start/stop/restart/status 会自动提示使用 supervisorctl
+  Supervisor 托管时自动代理 supervisorctl；观测服务是独立 program，不更新 ferry-stack 组
+  本地模式全部启动仅自动启动 OBSERVABILITY_ENABLED=true 的观测服务
 USAGE
 }
 
@@ -94,6 +102,46 @@ load_env() {
   export PYTHONPATH="$PYTHONPATH_DIR${PYTHONPATH:+:$PYTHONPATH}"
   export WECHAT_ACCOUNT_PATH="${WECHAT_ACCOUNT_PATH:-$WECHAT_ACCOUNT_PATH_DEFAULT}"
   export WECHAT_SYNC_BUF_PATH="${WECHAT_SYNC_BUF_PATH:-$WECHAT_SYNC_BUF_PATH_DEFAULT}"
+}
+
+# Snapshot observability overrides BEFORE load_env imports the main .env. Only
+# these keys may come from the separate credential file; never source dotenv.
+# Run this in the observability runner/subshell, not in the main app's shell.
+load_observability_env() {
+  ensure_env_file
+  local key value env_fd env_pid
+  local -a overrides=()
+  exec {env_fd}< <("$(env_python)" - "$OBSERVABILITY_ENV_FILE" <<'PY'
+import os
+import sys
+from dotenv.main import DotEnv
+
+keys = (
+    "OBSERVABILITY_ENABLED", "OBSERVABILITY_HOST", "OBSERVABILITY_PORT",
+    "OBSERVABILITY_STORE_DIR", "OBSERVABILITY_RETENTION_DAYS",
+    "OBSERVABILITY_PASSWORD_HASH", "OBSERVABILITY_READ_TOKEN",
+    "OBSERVABILITY_INGEST_TOKEN", "OBSERVABILITY_HMAC_KEY",
+    "OBSERVABILITY_COOKIE_SECURE", "OBSERVABILITY_SESSION_TTL_SECONDS",
+    "OBSERVABILITY_PI_USAGE_ENABLED", "OBSERVABILITY_PI_SESSION_DIRS",
+    "OBSERVABILITY_PI_SCAN_INTERVAL_SECONDS",
+)
+values = DotEnv(sys.argv[1], encoding="utf-8", override=False).dict()
+for key in keys:
+    value = os.environ.get(key, values.get(key))
+    if value is not None:
+        sys.stdout.write(f"{key}\0{value}\0")
+PY
+  )
+  env_pid=$!
+  while IFS= read -r -d '' key && IFS= read -r -d '' value; do
+    overrides+=("$key=$value")
+  done <&"$env_fd"
+  exec {env_fd}<&-
+  wait "$env_pid" || return $?
+  load_env || return $?
+  for value in "${overrides[@]}"; do
+    export "$value"
+  done
 }
 
 read_env_from_file() {
@@ -205,22 +253,32 @@ ensure_prerequisites() {
   fi
 }
 
-# 检测 supervisor 是否接管了 ferry-stack 进程组（无论程序处于何种状态）
+# STOPPED/BACKOFF/FATAL also mean managed; supervisorctl status returns nonzero
+# for these states. Conversely, an unknown group is not a managed/stopped stack.
 is_supervisor_managed() {
+  local target="${1:-${SUPERVISOR_GROUP}:*}" output
   command -v supervisorctl >/dev/null 2>&1 || return 1
-  supervisorctl status "${SUPERVISOR_GROUP}:*" >/dev/null 2>&1
+  output="$(supervisorctl status "$target" 2>/dev/null)" || true
+  awk -v target="$target" '
+    BEGIN { group = sub(/:\*$/, ":", target); found = 0 }
+    $2 ~ /^(STOPPED|STARTING|RUNNING|BACKOFF|STOPPING|EXITED|FATAL|UNKNOWN)$/ {
+      if ((group && index($1, target) == 1 && length($1) > length(target)) ||
+          (!group && $1 == target)) found = 1
+    }
+    END { exit !found }
+  ' <<< "$output"
 }
 
-print_supervisor_hint() {
-  cat <<HINT
-[SUPERVISOR] Ferry 已由 supervisor 托管（进程组: ${SUPERVISOR_GROUP}），请使用 supervisorctl 管理：
-
-  supervisorctl status  ${SUPERVISOR_GROUP}:*           查看全部状态
-  supervisorctl start   ${SUPERVISOR_GROUP}:*           启动全部
-  supervisorctl stop    ${SUPERVISOR_GROUP}:*           停止全部
-  supervisorctl restart ${SUPERVISOR_GROUP}:*           重启全部
-  supervisorctl restart ${SUPERVISOR_GROUP}:ferry    仅重启主服务（代码/.env 变更后）
-HINT
+supervisor_stack_action() {
+  local action="$1" result=0
+  supervisorctl "$action" "${SUPERVISOR_GROUP}:*" || result=$?
+  if is_supervisor_managed "$SUPERVISOR_OBSERVABILITY"; then
+    # Deliberately separate from ferry-stack: never reread/update the live group.
+    supervisorctl "$action" "$SUPERVISOR_OBSERVABILITY" || result=$?
+  else
+    echo "[INFO] Supervisor 尚未配置 ${SUPERVISOR_OBSERVABILITY}，跳过观测服务"
+  fi
+  return "$result"
 }
 
 pid_is_running() {
@@ -267,7 +325,7 @@ start_app() {
   local foreground="${1:-0}"
   ensure_dirs
   ensure_prerequisites
-  load_env
+  load_observability_env
   sync_pi_models || echo "[WARN] pi models.json 同步失败，继续启动"
 
   if pid_is_running "$APP_PID_FILE"; then
@@ -342,6 +400,67 @@ start_wechat_sidecar() {
   fi
 }
 
+# Keep dotenv imports out of the main service's environment.
+start_observability() (
+  local optional="${1:-0}"
+  ensure_dirs
+  if pid_is_running "$OBSERVABILITY_PID_FILE"; then
+    echo "[INFO] Observability 已在运行，PID=$(cat "$OBSERVABILITY_PID_FILE")"
+    return 0
+  fi
+  rm -f "$OBSERVABILITY_PID_FILE"
+  load_observability_env || return $?
+  if [[ "$optional" == "1" ]]; then
+    case "${OBSERVABILITY_ENABLED:-false}" in
+      true|True|TRUE|1|yes|Yes|YES|on|On|ON) ;;
+      *) echo "[INFO] Observability 未启用，跳过自动启动"; return 0 ;;
+    esac
+  fi
+  echo "[INFO] 后台启动 Observability..."
+  setsid nohup "$ROOT_DIR/bin/run-observability" >>"$OBSERVABILITY_LOG_FILE" 2>&1 < /dev/null &
+  local pid=$!
+  echo "$pid" > "$OBSERVABILITY_PID_FILE"
+  sleep 1
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "[INFO] Observability 启动成功，PID=$pid"
+    echo "[INFO] 日志文件: $OBSERVABILITY_LOG_FILE"
+  else
+    # Never print configuration or log contents, which may contain credentials.
+    echo "[ERROR] Observability 启动失败，请检查日志: $OBSERVABILITY_LOG_FILE"
+    rm -f "$OBSERVABILITY_PID_FILE"
+    return 1
+  fi
+)
+
+observability_action() {
+  local action="$1" optional="${2:-0}"
+  if is_supervisor_managed "$SUPERVISOR_OBSERVABILITY"; then
+    supervisorctl "$action" "$SUPERVISOR_OBSERVABILITY"
+    return $?
+  fi
+  if is_supervisor_managed; then
+    echo "[INFO] Supervisor 尚未配置 ${SUPERVISOR_OBSERVABILITY}，不会启动本地副本"
+    [[ "$optional" == "1" ]]
+    return $?
+  fi
+  case "$action" in
+    start) start_observability "$optional" ;;
+    stop) stop_pid "Observability" "$OBSERVABILITY_PID_FILE" ;;
+    restart)
+      stop_pid "Observability" "$OBSERVABILITY_PID_FILE"
+      start_observability "$optional"
+      ;;
+    status) status_one "Observability" "$OBSERVABILITY_PID_FILE" "$OBSERVABILITY_LOG_FILE" ;;
+  esac
+}
+
+observability_credentials() {
+  # The Python CLI reads both dotenv files itself. Do not import .env defaults
+  # into its environment or create credential/configuration files in this wrapper.
+  PYTHONPATH="$PYTHONPATH_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+    "$(env_python)" -m observability.credentials "$@"
+}
+
 status_one() {
   local name="$1"
   local pid_file="$2"
@@ -368,45 +487,47 @@ wechat_login() {
 main() {
   local cmd="${1:-start}"
   case "$cmd" in
-    start)
-      is_supervisor_managed && { print_supervisor_hint; exit 0; }
+    start|restart)
+      if is_supervisor_managed; then
+        supervisor_stack_action "$cmd"
+        return $?
+      fi
       shift || true
-      local foreground=0
+      local foreground=0 obs_result=0
       if [[ "${1:-}" == "-f" || "${1:-}" == "--foreground" ]]; then
         foreground=1
       fi
+      if [[ "$cmd" == "restart" ]]; then
+        stop_pid "WeChat sidecar" "$WECHAT_PID_FILE"
+        stop_pid "Ferry" "$APP_PID_FILE"
+      fi
+      # Resolve observability before start_app imports .env into this shell;
+      # otherwise those defaults would shadow .env.observability in the child.
+      # An optional service failure must not prevent the existing stack starting.
+      observability_action "$cmd" 1 || obs_result=$?
       start_app "$foreground"
       if [[ "$foreground" != "1" ]]; then
         start_wechat_sidecar 0 || true
       fi
+      return "$obs_result"
       ;;
     stop)
-      is_supervisor_managed && { print_supervisor_hint; exit 0; }
-      stop_pid "WeChat sidecar" "$WECHAT_PID_FILE"
-      stop_pid "Ferry" "$APP_PID_FILE"
-      ;;
-    restart)
-      is_supervisor_managed && { print_supervisor_hint; exit 0; }
-      shift || true
-      local foreground=0
-      if [[ "${1:-}" == "-f" || "${1:-}" == "--foreground" ]]; then
-        foreground=1
+      if is_supervisor_managed; then
+        supervisor_stack_action stop
+        return $?
       fi
       stop_pid "WeChat sidecar" "$WECHAT_PID_FILE"
       stop_pid "Ferry" "$APP_PID_FILE"
-      start_app "$foreground"
-      if [[ "$foreground" != "1" ]]; then
-        start_wechat_sidecar 0 || true
-      fi
+      observability_action stop 1
       ;;
     status)
       if is_supervisor_managed; then
-        echo "[SUPERVISOR] Ferry 由 supervisor 托管（进程组: ${SUPERVISOR_GROUP}）"
-        supervisorctl status "${SUPERVISOR_GROUP}:*"
-        exit 0
+        supervisor_stack_action status
+        return $?
       fi
       status_one "Ferry" "$APP_PID_FILE" "$APP_LOG_FILE"
       status_one "WeChat sidecar" "$WECHAT_PID_FILE" "$WECHAT_LOG_FILE"
+      observability_action status 1
       ;;
     wx)
       local subcmd="${2:-status}"
@@ -414,25 +535,43 @@ main() {
         login)
           wechat_login
           ;;
-        start)
-          is_supervisor_managed && { print_supervisor_hint; exit 0; }
-          start_wechat_sidecar 1
-          ;;
-        stop)
-          is_supervisor_managed && { print_supervisor_hint; exit 0; }
-          stop_pid "WeChat sidecar" "$WECHAT_PID_FILE"
-          ;;
-        status)
+        start|stop|restart|status)
           if is_supervisor_managed; then
-            supervisorctl status "${SUPERVISOR_GROUP}:wechat-sidecar"
-            exit 0
+            supervisorctl "$subcmd" "${SUPERVISOR_GROUP}:wechat-sidecar"
+            return $?
           fi
-          status_one "WeChat sidecar" "$WECHAT_PID_FILE" "$WECHAT_LOG_FILE"
+          case "$subcmd" in
+            start) start_wechat_sidecar 1 ;;
+            stop) stop_pid "WeChat sidecar" "$WECHAT_PID_FILE" ;;
+            restart)
+              stop_pid "WeChat sidecar" "$WECHAT_PID_FILE"
+              start_wechat_sidecar 1
+              ;;
+            status) status_one "WeChat sidecar" "$WECHAT_PID_FILE" "$WECHAT_LOG_FILE" ;;
+          esac
           ;;
         *)
           echo "[ERROR] 未知 wx 命令: $subcmd"
           usage
           exit 1
+          ;;
+      esac
+      ;;
+    obs)
+      local subcmd="${2:-status}"
+      case "$subcmd" in
+        start|stop|restart|status) observability_action "$subcmd" ;;
+        sync)
+          PYTHONPATH="$PYTHONPATH_DIR${PYTHONPATH:+:$PYTHONPATH}" "$(env_python)" -m observability.usage_cli sync
+          ;;
+        credentials)
+          shift 2
+          observability_credentials "$@"
+          ;;
+        *)
+          echo "[ERROR] 未知 obs 命令: $subcmd"
+          usage
+          return 1
           ;;
       esac
       ;;

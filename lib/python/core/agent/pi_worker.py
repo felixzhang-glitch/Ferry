@@ -20,6 +20,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from core.agent.types import AgentClientError
+from observability.telemetry import emit
 
 logger = logging.getLogger(__name__)
 _WORKER_SCRIPT = Path(__file__).resolve().parents[3] / "js" / "pi-worker.mjs"
@@ -219,6 +220,9 @@ class PiWorkerLease:
                 self.finished.set()
                 return b""
             if kind == "ferry_turn_ready":
+                setup_ms = event.get("setup_ms")
+                if type(setup_ms) in (int, float) and setup_ms >= 0:
+                    emit("stage", stage="worker_setup", status="success", duration_seconds=setup_ms / 1000)
                 logger.info(
                     "pi worker turn ready",
                     extra={"event": "pi.worker_turn_ready", "trace_id": self.trace_id,
@@ -392,7 +396,9 @@ class PiWorkerPool:
             raise
 
     async def _run(self, args: list[str], prepare: Callable[[], list[str]] | None = None) -> PiWorkerLease:
+        wait_started = time.monotonic()
         worker = await self._acquire()
+        emit("stage", stage="worker_wait", status="success", duration_seconds=time.monotonic() - wait_started)
         worker.stderr.clear()
         lease = PiWorkerLease(self, worker, uuid.uuid4().hex)
         try:

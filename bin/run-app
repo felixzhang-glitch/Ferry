@@ -10,7 +10,8 @@ export PATH="/root/.local/bin:/root/.nvm/versions/node/v20.19.4/bin:/root/.pyenv
 # Reuse dotenv parsing without invoking service control or changing Python.
 # shellcheck disable=SC1091
 source "$ROOT_DIR/bin/server"
-load_env
+# load_env plus private observability overrides; enable collection consistently.
+load_observability_env
 
 # Keep the pi model registry in sync so PI_MODEL in conf/.env is the single
 # switch; sync failures warn but never block startup.

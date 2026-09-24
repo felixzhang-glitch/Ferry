@@ -3,6 +3,10 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import os
+import resource
+import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -25,6 +29,8 @@ from core.session.deduplicator import MessageDeduplicator
 from core.session.manager import SessionManager
 from core.session.reminder_scheduler import ReminderScheduler
 from core.session.task_registry import ActiveTaskRegistry
+from observability import telemetry
+from observability.config import get_observability_settings
 
 settings = get_settings()
 setup_logging(settings.log_level)
@@ -257,8 +263,50 @@ async def push_file(request: Request) -> JSONResponse:
     return JSONResponse(content={"code": 0, "data": result})
 
 
+async def _sample_observability() -> None:
+    expected = time.monotonic()
+    while True:
+        try:
+            pool = agent_client._worker_pool
+            workers = pool.workers if pool else []
+            gauges = {
+                "mode": "worker" if pool else "cli",
+                "queue_feishu": sum(s.queue.qsize() for s in feishu_handler._message_queue._sessions.values()),
+                "queue_wechat": sum(s.queue.qsize() for s in wechat_handler._message_queue._sessions.values()),
+                "active_tasks": len(task_registry._tasks),
+                "worker_total": len(workers),
+                "worker_busy": sum(w.busy for w in workers),
+                "worker_starting": pool.starting if pool else 0,
+                "circuit_open": int(agent_client._circuit_open_until > time.monotonic()),
+                "session_mappings": len(agent_client._session_ids),
+                "daily_tasks": len(daily_scheduler._tasks),
+                "reminders": len(reminder_scheduler._reminders),
+                "pi_active": len(agent_client._active_processes),
+                "cpu_seconds": resource.getrusage(resource.RUSAGE_SELF).ru_utime + resource.getrusage(resource.RUSAGE_SELF).ru_stime,
+                "event_loop_lag_seconds": max(0., time.monotonic() - expected),
+            }
+            try:
+                gauges["rss_bytes"] = int(Path("/proc/self/statm").read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+                gauges["disk_free_bytes"] = shutil.disk_usage(".").free
+            except (OSError, ValueError, IndexError):
+                pass
+            telemetry.update_runtime(**gauges)
+        except Exception:
+            # Optional monitoring cannot stop the message loop or disclose data.
+            logger.warning("observability runtime sampling failed")
+        expected = time.monotonic() + 2.
+        await asyncio.sleep(2.)
+
+
 @app.on_event("startup")
 async def startup_event() -> None:
+    try:
+        observation_settings = get_observability_settings()
+        if observation_settings.enabled:
+            telemetry.configure(observation_settings)
+            app.state.observability_sampler = asyncio.create_task(_sample_observability())
+    except Exception:
+        logger.warning("observability disabled: invalid configuration")
     memory.ensure_workspace(settings)
     await agent_client.start()
     await reminder_scheduler.start()
@@ -282,3 +330,8 @@ async def shutdown_event() -> None:
     await reminder_scheduler.close()
     await feishu_client.close()
     await agent_client.close()
+    sampler = getattr(app.state, "observability_sampler", None)
+    if sampler is not None:
+        sampler.cancel()
+        await asyncio.gather(sampler, return_exceptions=True)
+    await asyncio.to_thread(telemetry.shutdown)

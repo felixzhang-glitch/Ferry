@@ -26,6 +26,7 @@ from core.session.deduplicator import MessageDeduplicator
 from core.session.manager import SessionManager, apply_pending_notices, format_file_notice
 from core.session.message_queue import SessionMessageQueue
 from core.session.task_registry import ActiveTaskRegistry
+from observability.telemetry import emit, observe_run, set_status, take_run_id
 
 logger = logging.getLogger(__name__)
 
@@ -79,14 +80,18 @@ class WeChatWebhookHandler:
         return {
             "code": 0,
             "replies": replies,
+            "observability_run_id": take_run_id(trace_id),
             "context_token": event.context_token,
         }
 
     async def _handle_text_event(self, event: WeChatTextMessageEvent, trace_id: str) -> list[str]:
+        emit("message", channel="wechat", source="interactive", status="received", count=1)
         if self._deduplicator.seen(f"wechat:{event.message_id}"):
+            emit("message", channel="wechat", source="interactive", status="duplicate", count=1)
             logger.info("duplicate wechat message ignored", extra={"trace_id": trace_id, "event": "wechat.deduplicate"})
             return []
 
+        emit("message", channel="wechat", source="interactive", status="accepted", count=1)
         session_key = self._build_session_key(event)
         normalized_text = event.text.strip().lower()
 
@@ -146,6 +151,8 @@ class WeChatWebhookHandler:
             agent_client=self._agent_client,
         )
         if command is not None:
+            if normalized_text == "/new":
+                emit("session", channel="wechat", operation="reset", status="success")
             return self._split_reply(command.reply_text)
 
         if normalized_text == "/skills":
@@ -177,6 +184,7 @@ class WeChatWebhookHandler:
                 result_future.cancel()
             raise
 
+    @observe_run(channel="wechat")
     async def _run_llm_job(self, event: WeChatTextMessageEvent, session_key: str, trace_id: str) -> list[str]:
         started = self._task_registry.start(
             key=session_key,
@@ -185,6 +193,7 @@ class WeChatWebhookHandler:
             cancel_callback=lambda: self._agent_client.cancel(trace_id),
         )
         if not started:
+            set_status("rejected")
             return self._split_reply("当前已有任务在运行中。发送 /stop 可强制终止后再试。")
 
         # Drain only once the turn is committed, so a rejected turn keeps the
@@ -219,11 +228,15 @@ class WeChatWebhookHandler:
 
             if not answer.strip():
                 answer = "(空响应)"
-            return self._split_reply(answer)
+            replies = self._split_reply(answer)
+            set_status("success")
+            return replies
         except AgentClientCancelled:
+            set_status("cancelled")
             logger.info("wechat message cancelled by user", extra={"trace_id": trace_id, "event": "wechat.cancel"})
             return self._split_reply("当前任务已终止。")
         except Exception:
+            set_status("error")
             logger.exception("failed to process wechat message", extra={"trace_id": trace_id, "event": "wechat.error"})
             return self._split_reply("服务繁忙，请稍后重试。")
         finally:

@@ -41,6 +41,7 @@ from core.session.manager import SessionManager, apply_pending_notices, format_f
 from core.session.message_queue import SessionMessageQueue
 from core.session.reminder_scheduler import ReminderScheduler
 from core.session.task_registry import ActiveTaskRegistry
+from observability.telemetry import emit, observe_run, set_status
 
 logger = logging.getLogger(__name__)
 
@@ -104,10 +105,13 @@ class FeishuWebhookHandler:
         return {"code": 0}
 
     async def _handle_text_event(self, event: Any, trace_id: str) -> None:
+        emit("message", channel="feishu", source="interactive", status="received", count=1)
         if self._deduplicator.seen(event.message_id):
+            emit("message", channel="feishu", source="interactive", status="duplicate", count=1)
             logger.info("duplicate message ignored", extra={"trace_id": trace_id, "event": "feishu.deduplicate"})
             return
 
+        emit("message", channel="feishu", source="interactive", status="accepted", count=1)
         session_key = SessionManager.build_key(user_id=event.user_id, chat_id=event.chat_id)
         normalized_text = event.text.strip().lower()
 
@@ -154,6 +158,8 @@ class FeishuWebhookHandler:
             agent_client=self._agent_client,
         )
         if command is not None:
+            if normalized_text == "/new":
+                emit("session", channel="feishu", operation="reset", status="success")
             await self._safe_reply(
                 message_id=event.message_id,
                 chat_id=event.chat_id,
@@ -211,10 +217,12 @@ class FeishuWebhookHandler:
             )
         await done_future
 
+    @observe_run(channel="feishu")
     async def _run_llm_job(self, event: Any, session_key: str, trace_id: str) -> None:
         try:
             user_text, inbound_image_paths = await self._build_user_text(event=event, trace_id=trace_id)
         except FeishuClientError:
+            set_status("error")
             logger.exception(
                 "failed to download received image",
                 extra={"trace_id": trace_id, "event": "feishu.image_download"},
@@ -235,6 +243,7 @@ class FeishuWebhookHandler:
             cancel_callback=lambda: self._agent_client.cancel(trace_id),
         )
         if not started:
+            set_status("rejected")
             await self._safe_reply(
                 message_id=event.message_id,
                 chat_id=event.chat_id,
@@ -302,14 +311,17 @@ class FeishuWebhookHandler:
                     already_sent_image_paths=delivered_image_paths,
                 )
 
+            set_status("success")
         except AgentClientCancelled:
             if auto_complete_on_image and delivered_image_paths:
+                set_status("success")
                 self._active_stream_cards.pop(trace_id, None)
                 logger.info(
                     "image generation completed before pi final response",
                     extra={"trace_id": trace_id, "event": "pipeline.image_auto_complete"},
                 )
                 return
+            set_status("cancelled")
             logger.info("message cancelled by user", extra={"trace_id": trace_id, "event": "pipeline.cancel"})
             await self._finalize_or_reply(
                 trace_id=trace_id,
@@ -318,6 +330,7 @@ class FeishuWebhookHandler:
                 text="当前任务已终止。",
             )
         except Exception:
+            set_status("error")
             logger.exception("failed to process message", extra={"trace_id": trace_id, "event": "pipeline.error"})
             await self._finalize_or_reply(
                 trace_id=trace_id,

@@ -33,6 +33,10 @@
 | 22 | 飞书渐进式卡片与工具进度 | 进入流式即发占位卡（不等首字）；pi 执行工具期间卡片显示 `🔧 <工具> · <参数摘要>`，无正文时显示占位、定稿清空 footer；更新必须 PATCH 同一张卡而非新建消息；卡片创建或 PATCH 失败降级为整段单条回复并覆盖在途卡片；`on_progress` 回调抛错不影响本轮；微信通道不受影响 | `tests/test_feishu_streaming.py`、`tests/test_feishu_reaction.py::test_update_markdown_card_patches_the_same_card`、`tests/test_pi_session.py::test_tool_execution_events_decode_into_progress_and_timing` + 真实 pi 冒烟核对卡片写入序列 |
 | 23 | 延迟观测字段 | 日志 formatter 不再丢 extra（`backend`、`feishu_stream_updates`、`feishu_streamed` 可见），非 JSON 值不炸日志；飞书四个传输助手成功路径统一带 `duration_ms`/`attempt`；`pi.tool_call`/`pi.tool_result` 给出工具级耗时 | `tests/test_logging.py`、`tests/test_feishu_reaction.py`（MockTransport 覆盖传输层）+ 生产日志抽查 |
 
+可观测回归：`tests/test_observability_store.py`、`tests/test_observability_web.py`、`tests/test_observability_server.py`、`tests/test_observability_instrumentation.py`、`tests/test_observability_nginx.py`。覆盖白名单不泄露正文、轮次/尝试/模型响应去重、失败与取消用量、文件恢复/保留/缓冲溢出、密码/Session/Token/Origin/上报隔离、私有38080入口、server代理Supervisor。真实模型和IM实发不由这些隔离测试替代；Web无内容不等于既有业务日志不保存内容
+
+pi 历史 Token 回归：`tests/test_pi_usage.py`（原生结构、缓存四项、压缩/分支摘要、跨日回合、fork/别名去重、增量/重写/删除归档、缓存恢复/并发锁、隐私）、`tests/test_pi_usage_routes.py`（鉴权、日历日期、全部历史、异步刷新、独立metrics）、`tests/test_pi_usage_integration.py`（临时原生日志→真实账本→API→追加同步→重启）。界面测试需单独运行 `runtime/browser-check-env/bin/python tests/test_pi_usage_ui.py`，普通pytest环境无Playwright时浏览器用例会跳过，不能当作已验证；覆盖6项含日期、热力图、模型图、竞态、CSP和320px。实际历史独立核对脚本为 `tests/audit_pi_usage.py`，只读取原生元数据，不发送模型或IM请求
+
 常驻模式下，上表 `--session-id` / `--append-system-prompt` / `@file` 由 worker 适配到对应 pi SDK API，语义保持不变。涉及主服务重启的上线验收仅在用户授权后执行；渠道实发与本地 mock/webhook 冒烟分别记录，不互相替代
 
 ## 迭代验收规则

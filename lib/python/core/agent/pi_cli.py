@@ -18,6 +18,7 @@ from app.config import Settings
 from app.skills import build_skill_summary
 from core.agent.types import AgentClientCancelled, AgentClientError, ProgressCallback
 from core.agent.pi_worker import PiWorkerLease, PiWorkerPool
+from observability.telemetry import observe_agent, observe_attempt, record_pi_event
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,7 @@ class PiCliClient:
                 del self._session_ids[session_key]
                 self._save_sessions()
 
+    @observe_agent()
     async def chat(
         self,
         messages: list[dict[str, str]],
@@ -193,6 +195,7 @@ class PiCliClient:
         finally:
             self._clear_cancel_request(trace_id)
 
+    @observe_agent(stream=True)
     async def chat_stream(
         self,
         messages: list[dict[str, str]],
@@ -320,6 +323,7 @@ class PiCliClient:
             self._kill_process_group(process)
         return True
 
+    @observe_attempt
     async def _run_stream_once(
         self,
         prompt: str,
@@ -383,6 +387,7 @@ class PiCliClient:
                 if event is None:
                     fallback_parts.append(text)
                     continue
+                record_pi_event(event)
 
                 if session_holder is not None and "id" not in session_holder:
                     found = self._extract_session_id(event)
@@ -603,6 +608,10 @@ class PiCliClient:
 
     def _process_env(self) -> dict[str, str]:
         env = os.environ.copy()
+        # Observability authentication never needs to reach the model worker.
+        for key in list(env):
+            if key.startswith("OBSERVABILITY_"):
+                env.pop(key, None)
         if self._api_key:
             env["DASHSCOPE_API_KEY"] = self._api_key
         if self._deepseek_api_key:
