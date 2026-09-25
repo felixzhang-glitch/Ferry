@@ -3,6 +3,20 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-09-25 · 可观测独立域名分流与回环监听收敛
+
+- 需求：独立观测域名（示例 `observability.example.com`）仅用于代理可观测看板（按域名分流），不再落到 nginx 默认页；观测服务改为仅回环监听，外部访问一律经 HTTPS 反代
+- 改动：新增独立域名 vhost（`/etc/nginx/conf.d/observability.example.com.conf`，`server_name observability.example.com`，`location /` 反代 `127.0.0.1:38080` 并透传 `Host`，`/internal/observability/` 返回 404；TLS 由云端边缘终止，源站仅监听 80）；`conf/.env.observability` 的 `OBSERVABILITY_HOST` 由 `0.0.0.0` 改为 `127.0.0.1` 并 `./bin/server obs restart`；`OBSERVABILITY_COOKIE_SECURE` 保持 `true`
+- 边界：未改动其他域名 vhost（含另一既有域名内既有 observability 路径 snippet）；该既有域名的 502 为其后端未监听的既有状态，与本次无关；不改安全组/防火墙
+- 验证：`nginx -t` 通过后 reload；`ss` 确认监听 `127.0.0.1:38080`；`Host: observability.example.com` 与端到端 `https://observability.example.com/` 均返回看板标题，默认 host 仍为原默认页；域上 `/internal/observability/events` 404；正确 Origin 登录得 401（源校验通过）、跨站 Origin 得 403（源校验仍生效）
+
+## 2026-09-25 · 可观测看板视觉改造（Notion 设计体系）
+
+- 需求：按 `docs/DESIGN.md`（Notion 设计分析）改造私有可观测看板的视觉层，统一品牌色、字体、圆角、阴影与语义色；不改变任何数据口径、接口字段与鉴权
+- 改动：`lib/python/observability/static/dashboard.css` 全量重写为 Notion token 层——primary 紫 `#5645d4`（主 CTA/焦点环/趋势主线）、brand-navy `#0a1530` 深色带（消息观测轨道、用量日历、`pre`）、canvas/surface 面与 hairline 描边、charcoal/ink/slate/steel 文字梯度、mint/lavender/sky/yellow 语义 tint、8px 按钮与 12px 卡片圆角、Notion Sans(Inter) 字体栈与 600 标题字重及负字距；热力图改紫色梯度（primary-pressed→brand-purple-300）；`dashboard.js` 仅替换环图/堆叠图硬编码色板为 Notion 品牌谱（紫/青/橙/粉/蓝，stone=其他）与环图底环色；`dashboard.html` 增 `theme-color` 元信息
+- 边界：纯静态视觉改动，未触碰 `web.py`/`store.py`/`pi_usage.py`/`telemetry.py`、接口、鉴权与 CSP；不引入外部字体或 CDN（`style-src 'self'` 不变），Notion Sans 以字体栈优先、系统/CJK 字体回退；不写真实域名与凭证
+- 验证：隔离回环实例（127.0.0.1:38099，临时 store 副本 + 已知密码 + 浏览器层 mock `/usage`）逐页签截图验收登录页、总览、性能、Token 用量、可靠性、运行状态与 390px 移动端；token 层 40 定义/40 引用、无孤儿与死变量；生产 38080 静态资源即时生效，未重启进程
+
 ## 2026-09-25 · 可观测模块文档补齐
 
 - 需求：核查最新私有可观测看板与 pi 历史用量是否已同步文档并推送 GitHub。代码与运维说明已随 `89e22e6` 推送，但索引类文档（AGENTS 代码地图、架构、产品清单、测试映射、安全）仍停留在该模块之前；README 的可观测描述过简，需扩写

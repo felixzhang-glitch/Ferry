@@ -3,6 +3,7 @@
 | 文档 | 主题 |
 |------|------|
 | [architecture.md](architecture.md) | 系统架构与技术栈 |
+| [DESIGN.md](DESIGN.md) | 可观测看板视觉设计体系（Notion token 映射源） |
 | [channels.md](channels.md) | 渠道接入：飞书 WS 长连接 / 微信 sidecar |
 | [routing.md](routing.md) | 单 pi 接入：接口、只读状态命令、配置迁移与数据兼容 |
 | [sessions.md](sessions.md) | pi 原生会话、key 与附件通知、去重、队列、定时任务 |
