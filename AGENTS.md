@@ -11,6 +11,7 @@
 ### 常用命令
 
 - 运行：`./bin/server start`（首次启动引导配置飞书凭证）、`./bin/server stop|restart|status`
+- 可观测：`./bin/server obs credentials|start|stop|restart|status|sync`（独立进程，默认 `127.0.0.1:38080/observability`；私有配置 `conf/.env.observability`）
 - 测试：`cd conf && pytest -q`（配置在 `conf/pytest.ini`，pythonpath 指向 `lib/python`）；`tests/` 为本地目录，不入库
 - 依赖安装：`pip install -r conf/requirements.txt`
 
@@ -34,10 +35,13 @@ lib/python/
   core/agent/     → PiCliClient（原生会话/流式/取消/重试/熔断）与轻量接口和异常(types)
   core/session/   → 会话隔离与附件通知(manager)、去重(deduplicator)、任务注册(task_registry)、
                     定时提醒(reminder_scheduler)、每日任务(daily_scheduler)、消息队列(message_queue)
+  observability/  → 可选的无正文可观测：白名单埋点(telemetry)、JSONL 事件账本与增量读端(store)、
+                    独立看板服务(web)+静态页(static)、鉴权原语(security)、凭证生成(credentials)、
+                    pi 历史用量账本(pi_usage / usage_cli)、独立配置(config，不导入 app.config)
 
 lib/js/wechat-sidecar.mjs → 微信 iLink Bot 长轮询 sidecar（Node.js）
-bin/server        → 服务控制（start/stop/restart/status/wx login|start|stop）
-conf/.env.example → 全部配置项及默认值（配置绑定在 lib/python/app/config.py）
+bin/server        → 服务控制（start/stop/restart/status、wx login|start|stop、obs credentials|start|stop|restart|status|sync）
+conf/.env.example → 全部配置项及默认值（主服务绑定 lib/python/app/config.py，观测绑定 lib/python/observability/config.py）
 rules/            → 注入 pi 的规则：system.md 公共 / admin.md 私有（gitignored），走 `--append-system-prompt`
 skills/           → 项目级 skills；每轮时间通过 pi system prompt 注入，不落入会话历史
 docs/index.md     → 项目文档索引 **重点，不了解项目的话优先看这里**
@@ -54,7 +58,7 @@ docs/index.md     → 项目文档索引 **重点，不了解项目的话优先�
 | `docs/TEST.md` | 测试要点与用例映射 |
 | `docs/functional-tests.md` | 核心功能回归测试清单（迭代验收必过） |
 | `docs/SECURITY.md` | 安全要求 |
-| `docs/RELIABILITY.md` | 可靠性与运维 |
+| `docs/RELIABILITY.md` | 可靠性与运维：部署、可观测看板与 pi 历史用量、故障处理 |
 | `docs/QUALITY_SCORE.md` | 质量评分 |
 | `docs/references/` | 第三方依赖与外部系统参考（pi / 飞书 / 微信） |
 

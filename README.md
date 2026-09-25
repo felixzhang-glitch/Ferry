@@ -178,7 +178,7 @@ node --test tests/wechat-sidecar.test.mjs
 ```text
 bin/          服务控制与托管启动入口
 conf/         环境配置、pi 模型注册表、依赖与 pytest 配置
-lib/python/   应用入口、双渠道、PiCliClient、会话与队列
+lib/python/   应用入口、双渠道、PiCliClient、会话与队列、可选观测
 lib/js/       微信 sidecar
 rules/        注入 pi 的规则：system.md 公共 / admin.md 私有（gitignored）
 skills/       项目级技能

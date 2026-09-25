@@ -3,6 +3,12 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-09-25 · 可观测模块文档补齐
+
+- 需求：核查最新私有可观测看板与 pi 历史用量是否已同步文档并推送 GitHub。代码与运维说明已随 `89e22e6` 推送，但索引类文档（AGENTS 代码地图、架构、产品清单、测试映射、安全）仍停留在该模块之前
+- 改动：`AGENTS.md` 新增 `observability/` 一级模块与 `./bin/server obs ...` 命令；`docs/architecture.md` 补技术栈行、埋点与账本分层图、目录结构、独立进程部署及「可观测与用量账本」小节；`docs/PRODUCT.md` 新增看板与 pi 历史用量两项功能及观测非目标；`docs/TEST.md` 补两条测试要点与四行用例映射；`docs/SECURITY.md` 补看板 / 只读 / 上报三类鉴权、观测隐私与三条已知风险；`docs/index.md`、`README.md` 项目结构、`docs/QUALITY_SCORE.md` 复评记录同步
+- 边界：纯文档改动，未触碰运行代码、配置与线上进程；不写真实域名、凭证、会话数量与 Token 分项；`conf/.env.observability`、`runtime/observability/`、`logs/`、`tests/` 保持 gitignored
+
 ## 2026-09-24 · GitHub 提交前隐私脱敏
 
 - 需求：检查数据并脱敏后推送 GitHub，仅发布代码、无凭证配置模板和可公开的功能/测试记录

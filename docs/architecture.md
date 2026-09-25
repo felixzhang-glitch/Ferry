@@ -11,6 +11,7 @@
 | 加密 | cryptography | 飞书回调解密（AES-CBC） |
 | Sidecar | Node.js | 微信 iLink Bot 长轮询 |
 | 唯一后端 | pi（Pi Coding Agent） | AI 推理、原生会话与上下文压缩 |
+| 可观测 | 独立 ASGI 进程 + 本地 JSONL 账本 | 运行事件、Prometheus 指标、pi 历史 Token 用量（可选、无正文） |
 
 ## 架构分层
 
@@ -21,6 +22,14 @@ graph TB
     C --> D[PiCliClient<br/>JSONL 调用与进程管理]
     D --> W[常驻 Node worker 池 / CLI 回退]
     W --> E[pi SDK / CLI<br/>原生历史与压缩]
+    C -.-> T[observability.telemetry<br/>白名单事件 · 有界队列]
+    D -.-> T
+    T --> J[(runtime/observability<br/>events-*.jsonl)]
+    J --> O[独立观测服务 :38080<br/>看板 · JSON API · /metrics]
+    A -.->|sidecar 回发回执<br/>POST /internal/observability/events| O
+    E -.-> N[(pi 原生 sessions JSONL)]
+    N --> P[pi_usage 只读用量账本]
+    P --> O
 ```
 
 ## 核心模块交互
@@ -47,17 +56,18 @@ graph TB
 
 ```
 Ferry/
-├── bin/                        # 服务控制脚本
-├── conf/                       # 配置模板、模型注册表、依赖、pytest 配置
+├── bin/                        # 服务控制脚本（主服务 / 微信 / 观测）
+├── conf/                       # 配置模板、模型注册表、依赖、pytest 配置、观测托管模板
 ├── lib/
 │   ├── python/
 │   │   ├── app/                # 入口、配置、命令、skills、记忆、时间、日志
 │   │   ├── channel/
 │   │   │   ├── feishu/         # 飞书渠道全链路
 │   │   │   └── wechat/         # 微信渠道
-│   │   └── core/
+│   │   ├── core/
 │   │       ├── agent/          # pi_cli、pi_worker 进程池与 types
 │   │       └── session/        # key/附件、去重、队列、任务、提醒、每日任务
+│   │   └── observability/      # 可选观测：埋点、事件账本、看板服务、pi 用量账本
 │   └── js/
 │       ├── pi-worker.mjs       # 常驻 pi SDK JSONL worker
 │       └── wechat-sidecar.mjs  # 微信 sidecar
@@ -75,6 +85,9 @@ Ferry/
 - `SessionManager` 不持久化对话历史，附件通知、消息队列与运行中任务为内存态
 - 不再读写后端选择状态；旧状态文件和其它用户运行数据不自动删除
 - 现有 pi cwd、session store、agent dir 不自动迁移；配置回退与迁移约束见 [routing.md](routing.md)
+- 观测是独立进程（默认 `127.0.0.1:38080/observability`），主服务仅在 `OBSERVABILITY_ENABLED=true` 时埋点；写盘失败或队列溢出不阻断 IM
+- 运行事件账本 `runtime/observability/events-*.jsonl` 默认保留 30 天；pi 历史用量是独立不过期账本 `runtime/observability/pi-usage/index.json`（目录 0700 / 文件 0600）
+- 观测凭证只存 `conf/.env.observability`（0600、gitignored），由 `./bin/server obs credentials` 生成；Supervisor program 名 `ferry-observability`，与 `ferry-stack:*` 分开重启
 
 ## 常驻 pi 运行时
 
@@ -87,6 +100,15 @@ Ferry/
 - 需配置 `PI_NODE_BIN`（与 pi 匹配的 Node，当前验证 22.23.2）和 `PI_SDK_MODULE`（安装目录的 `dist/index.js` 绝对路径）；当前适配锁定 pi 0.84.2，升级 pi 后需回归再调整版本约束
 - 设置 `PI_PERSISTENT_ENABLED=false` 并重启可回退原 CLI，不迁移/清空会话。其它模型、thinking、规则配置仍沿用 `conf/.env`
 - 观测：`pi.worker_ready` 记录启动耗时/PID；`pi.worker_turn_ready` 记录逐轮准备耗时与是否复用；`pi.worker_first_text` 记录本次 lease 到首字耗时；`pi.tool_call` / `pi.tool_result` 记录单个工具的开始时刻、耗时与成败。`pi.chat/stream.duration_ms` 仍是包含池等待、重试等的完整调用耗时。飞书每次出站请求由 client 传输层统一打点 `duration_ms` / `attempt`；日志 formatter 收全部 extra 字段，不再维护白名单
+
+## 可观测与用量账本
+
+`lib/python/observability/` 是自成一体的可选模块：`web.py` 不导入 `app.main`，`config.py` 不导入 `app.config`，关掉开关后主链路不产生事件。埋点走 `telemetry.py` 的白名单事件（轮次、pi 尝试、可见模型响应、工具、渠道回发），主进程是自身 journal 的唯一写入器；微信 sidecar 的回发结果用独立写 Token 回执到观测服务的 `/internal/observability/events`，Nginx 对外返回 404
+
+- 读端 `store.py` 增量读取有界样本（最多 200000 条），达上限明确提示不完整，不补零、不把未闭合轮次算成成功
+- `pi_usage.py` 只读 pi 原生 JSONL 的 usage 元数据，按 inode/size/mtime/ctime 找变化文件，跨进程 flock 串行、原子 fsync；`usage_cli.py` 是 `./bin/server obs sync` 的入口。不复制正文，不改原生会话
+- 两处 Token 口径互不相加：运行事件只累计可见 `assistant message_end.usage`，历史账本另含压缩/分支摘要用量；Prometheus counter 随进程重启归零，历史 gauges 是快照
+- 鉴权、保留期、隐私边界与部署步骤见 [RELIABILITY.md](RELIABILITY.md)、[SECURITY.md](SECURITY.md)
 
 ## 数据流
 

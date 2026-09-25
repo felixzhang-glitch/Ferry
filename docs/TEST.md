@@ -18,6 +18,8 @@
 6. 定时、记忆、队列、图片发现与推送功能不因后端模块删除而丢失
 7. 取消、重试、熔断与超时分别验证；持续输出时的总超时不能以 idle 超时用例代替
 8. 入站图片经 pi `@file` 多模态传递：`image_paths` 去重/转绝对/过滤不存在，插入 prompt 前；大图 base64 回显不撑爆 readline limit；微信图片纯 hex AES 密钥可解密
+9. 观测白名单与鉴权：事件不含正文 / 思考 / 工具参数与结果 / 文件路径 / 原始报错，会话仅 HMAC 去标识化；密码、Session、只读 Token、上报写 Token 与 Origin 互不通用；未闭合轮次不补成功，队列溢出与保留期提示不完整
+10. pi 历史用量：只读原生 JSONL，fork 复制 / 身份别名 / 重复同步 / 等长改写 / 丢字段副本不重复加账也不清零；增量 checkpoint、跨进程锁与缓存恢复可验证；用量口径（in/cr/cw/out，reason 已含 out）与轮次去重独立于运行事件
 
 ## 要点与用例映射
 
@@ -42,8 +44,12 @@
 | pi 启动检查与模型注册同步 | `tests/test_server_startup.py` | 脚本 |
 | 出站文件与鉴权 | `tests/test_feishu_file_send.py`、`tests/test_push_file_route.py`、`tests/wechat-sidecar.test.mjs` | 单元 / 路由 |
 | pre-push 密钥扫描 | `tests/test_secret_scan.py` | 单元 |
+| 观测事件白名单与账本 | `tests/test_observability_store.py`、`tests/test_observability_instrumentation.py` | 单元 |
+| 观测鉴权、看板路由与托管 | `tests/test_observability_web.py`、`tests/test_observability_server.py`、`tests/test_observability_nginx.py` | 单元 / 路由 |
+| pi 历史 Token 用量 | `tests/test_pi_usage.py`、`tests/test_pi_usage_routes.py`、`tests/test_pi_usage_integration.py` | 单元 / 路由 / 链路 |
+| 用量看板界面 | `tests/test_pi_usage_ui.py`（需隔离浏览器环境单独运行）、`tests/audit_pi_usage.py`（独立元数据对账） | 界面 / 脚本 |
 
-其它 CLI 的专属测试已移除，共用行为迁移到 pi / `AgentClient` 测试替身。技能发现覆盖 `app.skills`，配置迁移覆盖新键、旧键、跨输入源冲突优先级与默认值；项目不再导入旧客户端模块
+其它 CLI 的专属测试已移除，共用行为迁移到 pi / `AgentClient` 测试替身。技能发现覆盖 `app.skills`，配置迁移覆盖新键、旧键、跨输入源冲突优先级与默认值；项目不再导入旧客户端模块。观测与用量用例全部走临时目录和替身，不写 pi 原生历史、不实发 IM 消息、不调用真实模型；浏览器用例依赖 Playwright，主环境缺依赖时跳过并在隔离环境单独执行
 
 ## 手工验证与安全边界
 

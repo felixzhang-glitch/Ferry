@@ -13,7 +13,7 @@
 | [PRODUCT.md](PRODUCT.md) | 产品定位与功能项清单（开发方向锚点） |
 | [TEST.md](TEST.md) | 测试要点与用例映射 |
 | [SECURITY.md](SECURITY.md) | 安全要求：密钥扫描、签名校验、敏感数据 |
-| [RELIABILITY.md](RELIABILITY.md) | 可靠性与运维：部署、故障处理 |
+| [RELIABILITY.md](RELIABILITY.md) | 可靠性与运维：部署、私有可观测看板与 pi 历史 Token 用量、故障处理 |
 | [QUALITY_SCORE.md](QUALITY_SCORE.md) | 质量评分基线与复评记录 |
 | [../.qoder/hooks/README.md](../.qoder/hooks/README.md) | 推送前密钥扫描钩子：安装、覆盖范围、误报处理（`.qoder` 不入库，此类文件仅本机可见） |
 | [references/README.md](references/README.md) | 外部参考资料：[pi-cli.txt](references/pi-cli.txt)（唯一后端）、[feishu-bot-api.md](references/feishu-bot-api.md)、[wechat-ilink.md](references/wechat-ilink.md) |
