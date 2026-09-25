@@ -5,8 +5,8 @@
 
 ## 2026-09-25 · 可观测模块文档补齐
 
-- 需求：核查最新私有可观测看板与 pi 历史用量是否已同步文档并推送 GitHub。代码与运维说明已随 `89e22e6` 推送，但索引类文档（AGENTS 代码地图、架构、产品清单、测试映射、安全）仍停留在该模块之前
-- 改动：`AGENTS.md` 新增 `observability/` 一级模块与 `./bin/server obs ...` 命令；`docs/architecture.md` 补技术栈行、埋点与账本分层图、目录结构、独立进程部署及「可观测与用量账本」小节；`docs/PRODUCT.md` 新增看板与 pi 历史用量两项功能及观测非目标；`docs/TEST.md` 补两条测试要点与四行用例映射；`docs/SECURITY.md` 补看板 / 只读 / 上报三类鉴权、观测隐私与三条已知风险；`docs/index.md`、`README.md` 项目结构、`docs/QUALITY_SCORE.md` 复评记录同步
+- 需求：核查最新私有可观测看板与 pi 历史用量是否已同步文档并推送 GitHub。代码与运维说明已随 `89e22e6` 推送，但索引类文档（AGENTS 代码地图、架构、产品清单、测试映射、安全）仍停留在该模块之前；README 的可观测描述过简，需扩写
+- 改动：`AGENTS.md` 新增 `observability/` 一级模块与 `./bin/server obs ...` 命令；`docs/architecture.md` 补技术栈行、埋点与账本分层图、目录结构、独立进程部署及「可观测与用量账本」小节；`docs/PRODUCT.md` 新增看板与 pi 历史用量两项功能及观测非目标；`docs/TEST.md` 补两条测试要点与四行用例映射；`docs/SECURITY.md` 补看板 / 只读 / 上报三类鉴权、观测隐私与三条已知风险；`docs/index.md`、`docs/QUALITY_SCORE.md` 复评记录同步。`README.md`：能力清单新增可观测项，看板章节扩写为采集与不采集范围、五页签内容表、三层鉴权入口表、部署方式与数据边界，`pi 历史 Token 用量` 独立小节，配置表补 `OBSERVABILITY_ENABLED`，项目结构补「可选观测」
 - 边界：纯文档改动，未触碰运行代码、配置与线上进程；不写真实域名、凭证、会话数量与 Token 分项；`conf/.env.observability`、`runtime/observability/`、`logs/`、`tests/` 保持 gitignored
 
 ## 2026-09-24 · GitHub 提交前隐私脱敏

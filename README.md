@@ -71,6 +71,7 @@ sequenceDiagram
 - 文件与图片：入站图片经 pi 原生 `@file` 多模态喂给模型（飞书图文混排、微信图片均可），文件归档后附件通知搭载下一条消息，双渠道文件推送
 - 长期记忆与规则：`rules/` 与记忆经 `--append-system-prompt` 每轮注入，时间与时段走 system prompt，不污染 transcript
 - 定时能力：`/remind` 一次性提醒，`/daily` 每日任务，均持久化到本地文件
+- 私有可观测：独立看板进程统计轮次、阶段耗时、Token、工具与回发结果，另从 pi 原生历史只读采集全量 Token 用量；只看运行状态，不采集聊天正文
 
 ## 快速开始
 
@@ -112,7 +113,7 @@ curl --fail http://127.0.0.1:8080/healthz
 
 ### 私有可观测看板
 
-独立服务默认 `127.0.0.1:38080/observability`，只展示轮次、响应耗时、Token、工具与回发结果，不展示聊天内容。单用户密码登录；LLM 可使用独立只读 Token 读取 JSON API 或 `/metrics`
+独立进程，默认 `127.0.0.1:38080/observability`，与主服务分开启停（Supervisor program 名 `ferry-observability`）。看板只回答"跑得怎么样"，不回答"聊了什么"：采集业务轮次、pi 尝试、可见模型响应、工具调用、队列与渠道回发结果，不采集聊天正文、思考、工具参数与结果、文件名与路径、原始报错；会话只以 HMAC 去标识化 ID 出现，且不作为 Prometheus 标签
 
 ```bash
 ./bin/server obs credentials   # 首次生成私有配置，显示随机密码；已有凭证不覆盖
@@ -122,9 +123,31 @@ curl --fail http://127.0.0.1:8080/healthz
 ssh -N -L 38080:127.0.0.1:38080 <服务器>
 ```
 
-对外部署地址示例为 `https://observability.example.com/observability`（替换为自己的域名），后端可监听 `0.0.0.0:38080`，使用 Secure Cookie。上面的 SSH 方式适用于回环监听且关闭 Secure Cookie 的私有部署。Supervisor/Nginx 安装、接口、数据保留与完整性限制见 [运维说明](docs/RELIABILITY.md)。主服务运行指标从启用后开始；「Token 用量」另从 pi 原生历史只读采集用量元数据，不复制正文。凭证只存 `conf/.env.observability`，不入库、不提供默认密码
+页面按时间窗口、渠道、模型筛选，五个页签
 
-Token 用量参考 `dsh-panel`：支持 7/14/30/90 天、自定义和全部历史，180/365 天热力图、模型堆叠趋势、缓存读取率、Top 5 分布与排名。只采集 pi，不叠加 Ferry 实时 Token 埋点
+| 页签 | 内容 |
+|---|---|
+| 总览 | 轮次与错误趋势、渠道与状态分布、最近轮次（仅元数据，无正文） |
+| 性能 | 各阶段耗时 P50 / P95 / P99 与均值、工具调用次数与错误（不含工具输入输出） |
+| Token 用量 | pi 原生历史全量用量，见下一节 |
+| 可靠性 | 错误轮次、取消轮次、重试、回发失败；采集质量（丢弃事件、写入错误、无效行、缺失用量）与告警 |
+| 运行状态 | 主服务资源与运行快照，不随窗口和渠道筛选 |
+
+访问控制分三层，凭证互不通用
+
+| 入口 | 凭证 |
+|---|---|
+| 浏览器 | 单用户密码登录：scrypt 哈希 + 服务端 Session（默认 24h）+ 登录限流与 Origin 校验 |
+| `GET /api/observability/v1/*`、`GET /metrics` | 独立只读 Bearer Token，供 LLM 或脚本读取；不能改会话、不能上报 |
+| `POST /internal/observability/events` | 独立写 Token，且只接受回环来源；Nginx 模板对外返回 404 |
+
+凭证只存 `conf/.env.observability`（0600、gitignored），由 `./bin/server obs credentials` 生成，不提供默认密码，明文密码不落盘也不入日志；只读 Token 与写 Token 不允许同值，配置校验直接拒绝
+
+对外部署示例地址 `https://observability.example.com/observability`（替换为自己的域名），后端可监听 `0.0.0.0:38080` 并设 `OBSERVABILITY_COOKIE_SECURE=true`，不要用裸 HTTP 38080 提交登录密码。上面的 SSH 隧道方式适用于回环监听 + 关闭 Secure Cookie 的私有部署。Supervisor / Nginx 安装、完整接口清单、数据保留与完整性限制见 [运维说明](docs/RELIABILITY.md)
+
+#### pi 历史 Token 用量
+
+「Token 用量」页参考 `dsh-panel`，只读扫描 pi 原生 JSONL 的 usage 元数据，不复制正文、不改原生会话：7/14/30/90 天、自定义（最多十年）与全部历史，180/365 天活动热力图，模型堆叠日趋势与缓存读取率，Top 5 + 其他环图、排名与模型明细。日界统一 Asia/Shanghai，缺记录不补零。这部分与 Ferry 实时埋点是两本账，Token 不相加
 
 ```bash
 # 在 conf/.env.observability 开启 OBSERVABILITY_PI_USAGE_ENABLED=true
@@ -133,7 +156,9 @@ Token 用量参考 `dsh-panel`：支持 7/14/30/90 天、自定义和全部历�
 ./bin/server obs restart    # 启动后台持续同步，默认每 30 秒检查变化文件
 ```
 
-机器读取：`GET /api/observability/v1/usage?range=all`，同一只读 Token；全部历史保存在独立账本，不受运行事件 30 天保留期限制。压缩/分支摘要用量一并纳入，费用不估算
+机器读取：`GET /api/observability/v1/usage?range=all`（custom 带 `start` / `end`，`refresh=1` 触发后台单飞同步），沿用同一只读 Token。用量存在独立不过期账本 `runtime/observability/pi-usage/index.json`，不受运行事件 30 天保留期限制；上下文压缩与分支摘要用量计入消耗但不增加用户轮次，费用不估算
+
+> 边界：运行事件从启用后开始采集，不回填聊天历史；读端最多缓存 200000 条，达上限明确提示不完整。写盘失败或队列溢出不阻断 IM，但未落盘事件在异常退出时可能丢失；未闭合轮次显示运行中或未知，不补成成功。Prometheus counter 随进程重启归零，`/healthz` 只说明观测 HTTP 存活
 
 ## 对话命令
 
@@ -159,6 +184,7 @@ Token 用量参考 `dsh-panel`：支持 7/14/30/90 天、自定义和全部历�
 | `PI_WORK_DIR` | pi 工作目录，默认 `./runtime/codex-workdir/pi` |
 | `PI_TIMEOUT_SECONDS` | 单次 CLI 尝试总时限，默认 180 秒 |
 | `PUSH_API_TOKEN` | 出站文件推送 `POST /push/file` 的鉴权 |
+| `OBSERVABILITY_ENABLED` | 主服务是否埋点；观测服务自身凭证与开关在 `conf/.env.observability` |
 
 迁移注意：旧 `CODEX_*` 键仅作回退；不要直接移动现有 cwd、session store 或 agent dir，恢复会话需要映射与 pi transcript 同时可用。详见 [单 pi 接入与迁移](docs/routing.md)
 
