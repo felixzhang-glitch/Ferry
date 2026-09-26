@@ -3,6 +3,13 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-09-26 · hacker-news 技能入库
+
+- 需求：把 `hacker-news` 技能从个人全局 skill 目录收进项目 `skills/`，随仓库分发并推送 GitHub；能力为 HN 榜单（top/new/best/ask/show/job）与详情、评论树、全文搜索、用户信息、文章正文提取，免密钥
+- 改动：新增 `skills/hacker-news/scripts/hackerNews.mjs`（零依赖 ESM，Node 18+ / Bun 通用，数据源为官方 Firebase API + Algolia 搜索 API）与 `skills/hacker-news/SKILL.md`（子命令表、tags 参考、分页上限等注意事项）。文档内脚本路径由写死的 `~/.agents/skills/hacker-news/...` 改为 `<skill-dir>` 占位：`app/skills.py` 只发现仓库内 `skills/`，而 pi 的 cwd 是部署机上的 runtime 工作目录，运行机 home 下没有这份全局副本；Mac 本地全局副本仍在文档中保留为备选路径
+- 边界：只新增技能文件，不改 Python 代码、配置与线上服务；技能自身零第三方依赖、全链路免密钥，不含任何凭证或私有路径；未在服务器上做任何变更（拉取发布是后续独立动作）
+- 验证：`~/.bun/bin/bun skills/hacker-news/scripts/hackerNews.mjs` 实跑 `top` / `search` / `item --tree` / `user` / `maxitem` / `--json` 均正常；`app.skills.build_skill_summary()` 发现 14 个技能且含 `hacker-news`，frontmatter 解析出 name 与 description；本地无 `tests/`，未触碰的 Python 主链路无需回归
+
 ## 2026-09-25 · 可观测独立域名分流与回环监听收敛
 
 - 需求：独立观测域名（示例 `observability.example.com`）仅用于代理可观测看板（按域名分流），不再落到 nginx 默认页；观测服务改为仅回环监听，外部访问一律经 HTTPS 反代
