@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 import os
@@ -403,7 +404,13 @@ class PiWorkerPool:
         lease = PiWorkerLease(self, worker, uuid.uuid4().hex)
         try:
             if prepare is not None:
-                args = prepare()
+                # The lease may arrive after a long queue wait, so prepare is
+                # invoked here; it may be a coroutine that rebuilds system
+                # input off the event loop (memory auto-commit runs git).
+                prepared = prepare()
+                if inspect.isawaitable(prepared):
+                    prepared = await prepared
+                args = prepared
             assert worker.process.stdin is not None
             worker.process.stdin.write((json.dumps({
                 "type": "run", "id": lease.request_id, "args": args,

@@ -192,6 +192,8 @@ ssh -N -L 38080:127.0.0.1:38080 <服务器>
 ```bash
 .venv/bin/python -m pytest -c conf/pytest.ini -q
 node --test tests/wechat-sidecar.test.mjs
+# pi-worker SDK 测试需 Node >= 22.19（与 pi 运行时一致）
+/root/.nvm/versions/node/v22.23.2/bin/node --test tests/pi-worker.test.mjs
 ```
 
 `tests/` 是本地目录，不随仓库分发（已取消跟踪 + `.gitignore`）：clone 下来无测试可跑，用例映射见 [测试要点](docs/TEST.md)

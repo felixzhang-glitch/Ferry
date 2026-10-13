@@ -121,7 +121,9 @@ def parse_message_event(
         if text:
             text = _strip_mention_keys(text=text, mention_keys=mention_keys)
         if not text:
-            text = "用户发送了一张图片。"
+            # A bare @mention with no body: claiming an image was sent would
+            # make the model answer a photo that does not exist.
+            text = "用户发送了一张图片。" if image_keys else "（用户仅@了机器人，没有其他内容）"
 
     sender = event.get("sender") or {}
     sender_id = sender.get("sender_id") or {}

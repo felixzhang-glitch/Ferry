@@ -5,14 +5,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-export PATH="/root/.nvm/versions/node/v20.19.4/bin:$PATH"
+export PATH="/root/.nvm/versions/node/v22.23.2/bin:/root/.nvm/versions/node/v20.19.4/bin:$PATH"
 
-set -a
 # shellcheck disable=SC1091
-source "$ROOT_DIR/conf/.env"
-set +a
-export WECHAT_ACCOUNT_PATH="${WECHAT_ACCOUNT_PATH:-$ROOT_DIR/conf/wechat/account.json}"
-export WECHAT_SYNC_BUF_PATH="${WECHAT_SYNC_BUF_PATH:-$ROOT_DIR/runtime/wechat/get_updates_buf.txt}"
+source "$ROOT_DIR/bin/server"
+# Safe dotenv parsing (never executes .env as shell code) + account defaults.
+load_env
+# Outbound /send_file roots; fails closed inside the sidecar when unset.
+export_wechat_sidecar_allowlist
 
 if [[ ! -f "$WECHAT_ACCOUNT_PATH" ]]; then
   echo "[ERROR] WeChat 未登录（缺少 $WECHAT_ACCOUNT_PATH），请先执行 ./bin/server wx login"

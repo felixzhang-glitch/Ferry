@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import mimetypes
@@ -68,7 +69,11 @@ class FeishuWebhookHandler:
         self._reminder_scheduler = reminder_scheduler
         self._daily_scheduler = daily_scheduler
         self._message_queue = message_queue or SessionMessageQueue(max_pending=10)
-        self._downloaded_image_paths: list[str] = []
+        # Cross-turn claims on generated image files. The generated-images
+        # directory is shared by every session (one pi work dir), so without
+        # claims a concurrent turn's watcher could deliver this turn's image
+        # and vice versa. Runs on the single event loop: no lock needed.
+        self._claimed_generated_images: set[str] = set()
         # trace_id -> message_id of an in-flight streaming card, so the error /
         # cancel paths can overwrite the partial card instead of posting anew.
         self._active_stream_cards: dict[str, str] = {}
@@ -84,9 +89,11 @@ class FeishuWebhookHandler:
 
         payload = self._parse_payload(raw_body)
         payload = self._verify_and_decrypt_payload(headers=headers, raw_body=raw_body, payload=payload)
+        # Authenticate before event-type dispatch: an unsupported event type
+        # must not become an unauthenticated probing surface.
+        self._verify_token(payload=payload)
 
         if is_url_verification(payload):
-            self._verify_token(payload=payload)
             return {"challenge": payload.get("challenge")}
 
         event = parse_message_event(
@@ -97,8 +104,6 @@ class FeishuWebhookHandler:
         if event is None:
             logger.info("ignored unsupported event", extra={"trace_id": trace_id, "event": "feishu.ignore"})
             return {"code": 0}
-
-        self._verify_token(payload=payload)
 
         task = asyncio.create_task(self._handle_text_event(event=event, trace_id=trace_id))
         task.add_done_callback(lambda done: self._log_background_task_result(done, trace_id))
@@ -219,9 +224,10 @@ class FeishuWebhookHandler:
 
     @observe_run(channel="feishu")
     async def _run_llm_job(self, event: Any, session_key: str, trace_id: str) -> None:
+        inbound_image_paths: list[str] = []
         try:
             user_text, inbound_image_paths = await self._build_user_text(event=event, trace_id=trace_id)
-        except FeishuClientError:
+        except (FeishuClientError, OSError):
             set_status("error")
             logger.exception(
                 "failed to download received image",
@@ -234,6 +240,7 @@ class FeishuWebhookHandler:
                 trace_id=trace_id,
                 request_uuid=f"{event.message_id}-image-download-failed",
             )
+            await asyncio.to_thread(self._cleanup_downloaded_images, inbound_image_paths)
             return
 
         started = self._task_registry.start(
@@ -295,7 +302,9 @@ class FeishuWebhookHandler:
                 generated_images = []
                 if auto_complete_on_image:
                     generated_images = self._filter_unsent_images(
-                        await asyncio.to_thread(self._find_generated_images_since, generated_since),
+                        self._claim_new_images(
+                            await asyncio.to_thread(self._find_generated_images_since, generated_since)
+                        ),
                         delivered_image_paths,
                     )
                 if not answer.strip() and generated_images:
@@ -315,10 +324,17 @@ class FeishuWebhookHandler:
         except AgentClientCancelled:
             if auto_complete_on_image and delivered_image_paths:
                 set_status("success")
-                self._active_stream_cards.pop(trace_id, None)
                 logger.info(
                     "image generation completed before pi final response",
                     extra={"trace_id": trace_id, "event": "pipeline.image_auto_complete"},
+                )
+                # The placeholder card still says 正在处理; overwrite it so the
+                # turn does not end on a dead card.
+                await self._finalize_or_reply(
+                    trace_id=trace_id,
+                    message_id=event.message_id,
+                    chat_id=event.chat_id,
+                    text="图片已生成，任务已自动完成。",
                 )
                 return
             set_status("cancelled")
@@ -342,7 +358,9 @@ class FeishuWebhookHandler:
             if image_watch_task is not None:
                 await self._finish_image_watch_task(image_watch_task, delivered_image_paths)
             self._task_registry.finish(key=session_key, trace_id=trace_id)
-            self._cleanup_downloaded_images()
+            # Per-turn cleanup: only this turn's downloads, never another
+            # session's in-flight files (previously a shared instance list).
+            await asyncio.to_thread(self._cleanup_downloaded_images, inbound_image_paths)
 
     async def _stream_to_feishu(
         self,
@@ -445,7 +463,9 @@ class FeishuWebhookHandler:
         generated_images = []
         if include_recent_generated_images:
             generated_images = self._filter_unsent_images(
-                await asyncio.to_thread(self._find_generated_images_since, generated_since),
+                self._claim_new_images(
+                    await asyncio.to_thread(self._find_generated_images_since, generated_since)
+                ),
                 already_sent,
             )
         if not answer:
@@ -659,12 +679,20 @@ class FeishuWebhookHandler:
 
         target = directory / name
         stem, suffix = os.path.splitext(name)
+        # O_EXCL closes the TOCTOU window: two sessions sending the same file
+        # name concurrently used to both pass `target.exists()` and overwrite
+        # each other's archive. Creation now fails atomically for the loser.
         counter = 1
-        while target.exists():
-            target = directory / f"{stem}-{counter}{suffix}"
-            counter += 1
-        target.write_bytes(file_bytes)
-        return os.path.realpath(target)
+        while True:
+            try:
+                fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            except FileExistsError:
+                target = directory / f"{stem}-{counter}{suffix}"
+                counter += 1
+                continue
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(file_bytes)
+            return os.path.realpath(target)
 
     @staticmethod
     def _sanitize_file_name(file_name: str) -> str:
@@ -698,7 +726,7 @@ class FeishuWebhookHandler:
                         trace_id=trace_id,
                     )
                 )
-            except FeishuClientError:
+            except (FeishuClientError, OSError):
                 logger.warning(
                     "failed to download one image, continuing with the rest",
                     extra={
@@ -749,14 +777,17 @@ class FeishuWebhookHandler:
         )
         suffix = self._image_suffix_from_content_type(content_type)
         directory = Path(str(getattr(self._settings, "feishu_received_images_dir", "./runtime/feishu-images")))
-        directory.mkdir(parents=True, exist_ok=True)
         safe_message_id = self._safe_filename_part(message_id)
         safe_image_key = self._safe_filename_part(image_key)[:32]
         image_path = directory / f"{safe_message_id}-{safe_image_key}{suffix}"
-        image_path.write_bytes(image_bytes)
-        absolute_path = os.path.abspath(image_path)
-        self._downloaded_image_paths.append(absolute_path)
-        return absolute_path
+
+        def _write() -> str:
+            # Image bytes can be several MB; keep the write off the event loop.
+            directory.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(image_bytes)
+            return os.path.abspath(image_path)
+
+        return await asyncio.to_thread(_write)
 
     @staticmethod
     def _image_suffix_from_content_type(content_type: str) -> str:
@@ -853,7 +884,9 @@ class FeishuWebhookHandler:
             while True:
                 await asyncio.sleep(1.0)
                 image_paths = self._filter_unsent_images(
-                    await asyncio.to_thread(self._find_generated_images_since, generated_since),
+                    self._claim_new_images(
+                        await asyncio.to_thread(self._find_generated_images_since, generated_since)
+                    ),
                     delivered_image_paths,
                 )
                 for image_path in image_paths:
@@ -906,6 +939,22 @@ class FeishuWebhookHandler:
         # Allow slight clock/order skew between process start and image file write.
         return find_recent_generated_images(directory=directory, since=max(0.0, since - 2.0), until=time.time() + 2.0)
 
+    def _claim_new_images(self, image_paths: list[str]) -> list[str]:
+        """Atomically claim not-yet-claimed generated images for this turn.
+
+        The generated-images directory is shared across sessions, so a file
+        appearing in this turn's mtime window may belong to a concurrent
+        turn's pi run. Claims make delivery exclusive; an image claimed by
+        another turn is skipped even if its mtime falls in our window.
+        """
+        claimed: list[str] = []
+        for path in image_paths:
+            if path in self._claimed_generated_images:
+                continue
+            self._claimed_generated_images.add(path)
+            claimed.append(path)
+        return claimed
+
     @staticmethod
     def _filter_unsent_images(image_paths: list[str], delivered_image_paths: list[str]) -> list[str]:
         delivered = set(delivered_image_paths)
@@ -928,8 +977,14 @@ class FeishuWebhookHandler:
 
     @staticmethod
     def _looks_like_image_request(text: str) -> bool:
+        # Bare "图" matched 图表/地图/试图 and turned unrelated turns into image
+        # watchers that could steal a concurrent session's generated file.
+        # Compound forms cover the real phrasings (生成一张图/画张图/来张图).
         lowered = text.lower()
-        keywords = ("画", "图", "图片", "插图", "漫画", "海报", "生成图", "image", "draw", "illustration")
+        keywords = (
+            "画", "张图", "图片", "插图", "漫画", "海报", "生成图", "配图",
+            "image", "draw", "illustration",
+        )
         return any(keyword in lowered for keyword in keywords)
 
     async def _safe_reply_image(
@@ -963,13 +1018,13 @@ class FeishuWebhookHandler:
             request_uuid=f"{request_uuid}-send" if request_uuid else None,
         )
 
-    def _cleanup_downloaded_images(self) -> None:
-        for image_path in self._downloaded_image_paths:
+    @staticmethod
+    def _cleanup_downloaded_images(image_paths: list[str]) -> None:
+        for image_path in image_paths:
             try:
                 os.remove(image_path)
             except OSError:
                 pass
-        self._downloaded_image_paths.clear()
 
     async def _finalize_or_reply(
         self,
@@ -1166,7 +1221,9 @@ class FeishuWebhookHandler:
             return
 
         token = extract_token(payload)
-        if token != self._settings.feishu_verification_token:
+        if not hmac.compare_digest(
+            token.encode("utf-8"), self._settings.feishu_verification_token.encode("utf-8")
+        ):
             raise HTTPException(status_code=401, detail="verification token mismatch")
 
     @staticmethod

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import uuid
@@ -245,14 +246,21 @@ class WeChatWebhookHandler:
     def _verify_token(self, headers: Mapping[str, str]) -> None:
         expected = self._settings.wechat_webhook_token.strip()
         if not expected:
-            return
+            # Fail closed, mirroring /push/file: the server may bind a public
+            # interface, so an unconfigured token must never mean "allow all".
+            raise HTTPException(
+                status_code=503, detail="wechat webhook token not configured"
+            )
 
         auth_header = ""
         for key, value in headers.items():
             if key.lower() == "authorization":
                 auth_header = value.strip()
                 break
-        if auth_header != f"Bearer {expected}":
+        # Constant-time compare; a plain != leaks token length/prefix timing.
+        if not hmac.compare_digest(
+            auth_header.encode("utf-8"), f"Bearer {expected}".encode("utf-8")
+        ):
             raise HTTPException(status_code=401, detail="invalid wechat webhook token")
 
     @staticmethod

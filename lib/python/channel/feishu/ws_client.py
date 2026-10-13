@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from typing import TYPE_CHECKING, Any
 
 import lark_oapi as lark
@@ -51,6 +52,7 @@ class FeishuWsClient:
             event_handler=event_handler,
             log_level=log_level,
         )
+        self._stopped = False
 
     def start_in_thread(self) -> None:
         """Start the WebSocket client in a daemon thread (blocking call)."""
@@ -58,11 +60,32 @@ class FeishuWsClient:
         thread.start()
         logger.info("feishu long-connection client thread started")
 
+    def stop(self) -> None:
+        """Refuse new events during shutdown; the daemon thread dies with the process.
+
+        The SDK offers no graceful disconnect, so this is a delivery gate, not
+        a socket close: events that arrive while the app is tearing down would
+        otherwise hit an already-closed agent client.
+        """
+        self._stopped = True
+
     def _run(self) -> None:
-        try:
-            self._client.start()
-        except Exception:
-            logger.exception("feishu ws client crashed")
+        # The SDK raises out of start() on credential/limit errors instead of
+        # reconnecting, and a dead thread silently stops all Feishu events
+        # while the HTTP healthz stays green. Supervise with backoff: quick
+        # failures back off exponentially, a long-lived connection resets it.
+        backoff = 1.0
+        while not self._stopped:
+            started = time.monotonic()
+            try:
+                self._client.start()
+                logger.warning("feishu ws client exited; restarting")
+            except Exception:
+                logger.exception("feishu ws client crashed")
+            if time.monotonic() - started > 60.0:
+                backoff = 1.0
+            time.sleep(backoff)
+            backoff = min(backoff * 2.0, 60.0)
 
     @staticmethod
     def _on_ignored_event(_data: Any) -> None:
@@ -70,6 +93,9 @@ class FeishuWsClient:
 
     def _on_message_receive(self, data: P2ImMessageReceiveV1) -> None:
         """Synchronous callback invoked by lark SDK in its own thread."""
+        if self._stopped:
+            logger.info("dropping feishu event received during shutdown")
+            return
         try:
             event = self._convert_event(data)
             if event is None:
@@ -150,7 +176,8 @@ class FeishuWsClient:
                     text = text.replace(key, " ")
                 text = " ".join(text.strip().split())
             if not text:
-                text = "用户发送了一张图片。"
+                # Bare @mention: no body and no image; keep the caption honest.
+                text = "用户发送了一张图片。" if image_keys else "（用户仅@了机器人，没有其他内容）"
 
         # Extract sender info
         sender_id = sender.sender_id

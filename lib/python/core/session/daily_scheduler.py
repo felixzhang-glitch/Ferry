@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.clock import TIMEZONE
 from observability.telemetry import emit, observe_run, set_status
 
 logger = logging.getLogger(__name__)
@@ -104,21 +105,25 @@ class DailyTaskScheduler:
             await asyncio.gather(*loops, return_exceptions=True)
 
     async def _run_loop(self, task: DailyTask) -> None:
-        try:
-            if self._should_catch_up(task):
-                await self._execute(task)
-            while True:
-                await asyncio.sleep(self._seconds_until_next_run(task))
-                if task.last_run_date == self._today():
-                    continue
-                await self._execute(task)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception(
-                "daily task loop crashed",
-                extra={"trace_id": task.task_id, "event": "daily.loop_error"},
-            )
+        # A loop coroutine that died left the task listed, persisted and
+        # forever silent until restart. Supervise: log, back off, retry.
+        while True:
+            try:
+                if self._should_catch_up(task):
+                    await self._execute(task)
+                while True:
+                    await asyncio.sleep(self._seconds_until_next_run(task))
+                    if task.last_run_date == self._today():
+                        continue
+                    await self._execute(task)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "daily task loop crashed; restarting after backoff",
+                    extra={"trace_id": task.task_id, "event": "daily.loop_error"},
+                )
+                await asyncio.sleep(60.0)
 
     @observe_run(channel="scheduled")
     async def _execute(self, task: DailyTask) -> None:
@@ -203,7 +208,9 @@ class DailyTaskScheduler:
 
     @staticmethod
     def _now() -> datetime.datetime:
-        return datetime.datetime.now()
+        # Anchored to the explicit zone (matches clock injection); host TZ no
+        # longer decides when 08:00 fires.
+        return datetime.datetime.now(TIMEZONE)
 
     def _today(self) -> str:
         return self._now().strftime("%Y-%m-%d")

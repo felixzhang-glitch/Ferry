@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 
 ReminderCallback = Callable[[str, str, str], Awaitable[None]]
 
+# A transient Feishu outage at fire time used to orphan the reminder for the
+# whole process lifetime: the task was popped while the reminder stayed in the
+# store, and only a restart (possibly weeks later) replayed it. Retry in-process.
+MAX_DELIVERY_ATTEMPTS = 5
+RETRY_DELAY_SECONDS = 60.0
+
 
 @dataclass(slots=True)
 class Reminder:
@@ -28,8 +34,17 @@ class Reminder:
 
 
 class ReminderScheduler:
-    def __init__(self, callback: ReminderCallback, store_path: str = "") -> None:
+    def __init__(
+        self,
+        callback: ReminderCallback,
+        store_path: str = "",
+        *,
+        max_delivery_attempts: int = MAX_DELIVERY_ATTEMPTS,
+        retry_delay_seconds: float = RETRY_DELAY_SECONDS,
+    ) -> None:
         self._callback = callback
+        self._max_delivery_attempts = max(1, int(max_delivery_attempts))
+        self._retry_delay_seconds = max(0.0, float(retry_delay_seconds))
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._reminders: dict[str, Reminder] = {}
         self._lock = asyncio.Lock()
@@ -83,34 +98,51 @@ class ReminderScheduler:
 
     async def _run(self, reminder: Reminder) -> None:
         remove_on_exit = False
+        trace_id = f"reminder-{reminder.reminder_id}"
         try:
             await asyncio.sleep(max(0.0, reminder.due_at - time.time()))
-            trace_id = f"reminder-{reminder.reminder_id}"
-            delivery_started = time.monotonic()
-            delivery_status = "error"
-            try:
-                await self._callback(reminder.chat_id, reminder.text, trace_id)
-                delivery_status = "success"
-            except asyncio.CancelledError:
-                delivery_status = "cancelled"
-                raise
-            finally:
-                emit("task", channel="feishu", source="scheduled", operation="reminder",
-                     stage="task_delivery", status=delivery_status, count=1,
-                     duration_seconds=time.monotonic() - delivery_started)
-            remove_on_exit = True
-            logger.info(
-                "reminder delivered",
-                extra={"trace_id": trace_id, "event": "reminder.delivered"},
-            )
+            for attempt in range(1, self._max_delivery_attempts + 1):
+                delivery_started = time.monotonic()
+                delivery_status = "error"
+                try:
+                    await self._callback(reminder.chat_id, reminder.text, trace_id)
+                    delivery_status = "success"
+                except asyncio.CancelledError:
+                    delivery_status = "cancelled"
+                    raise
+                except Exception:
+                    logger.exception(
+                        "failed to deliver reminder",
+                        extra={
+                            "trace_id": trace_id,
+                            "event": "reminder.error",
+                            "attempt": attempt,
+                            "max_attempts": self._max_delivery_attempts,
+                        },
+                    )
+                finally:
+                    emit("task", channel="feishu", source="scheduled", operation="reminder",
+                         stage="task_delivery", status=delivery_status, count=1,
+                         duration_seconds=time.monotonic() - delivery_started)
+
+                if delivery_status == "success":
+                    remove_on_exit = True
+                    logger.info(
+                        "reminder delivered",
+                        extra={"trace_id": trace_id, "event": "reminder.delivered"},
+                    )
+                    return
+                if attempt < self._max_delivery_attempts:
+                    await asyncio.sleep(self._retry_delay_seconds)
+            # All attempts failed: keep the reminder in the store so the next
+            # startup replays it, and drop the dead task to avoid a leak.
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception(
-                "failed to deliver reminder",
-                extra={"trace_id": reminder.reminder_id, "event": "reminder.error"},
+                "reminder task failed",
+                extra={"trace_id": trace_id, "event": "reminder.error"},
             )
-            # Keep the reminder so it can be retried on next startup.
         finally:
             async with self._lock:
                 self._tasks.pop(reminder.reminder_id, None)

@@ -133,7 +133,7 @@ class PiCliClient:
 
         session_id, is_new = self._get_or_create_session_id(session_key)
         session_holder: dict[str, str] = {}
-        prompt = self._build_native_prompt(messages, include_preamble=is_new)
+        prompt = await self._build_native_prompt_async(messages, include_preamble=is_new)
         request_summary = self._summarize_messages(messages)
         resolved_images = self._resolve_image_paths(image_paths)
         attempt = 0
@@ -209,7 +209,7 @@ class PiCliClient:
 
         session_id, is_new = self._get_or_create_session_id(session_key)
         session_holder: dict[str, str] = {}
-        prompt = self._build_native_prompt(messages, include_preamble=is_new)
+        prompt = await self._build_native_prompt_async(messages, include_preamble=is_new)
         request_summary = self._summarize_messages(messages)
         resolved_images = self._resolve_image_paths(image_paths)
         attempt = 0
@@ -334,7 +334,10 @@ class PiCliClient:
         image_paths: list[str] | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> AsyncIterator[str]:
-        command = self._build_command(session_id=session_id, image_paths=image_paths)
+        system_paths = await asyncio.to_thread(self._system_prompt_files)
+        command = self._build_command(
+            session_id=session_id, image_paths=image_paths, system_prompt_paths=system_paths
+        )
         command.append(prompt)
         if self._closed:
             raise AgentClientError("pi client is closed")
@@ -544,6 +547,7 @@ class PiCliClient:
         self,
         session_id: str | None = None,
         image_paths: list[str] | None = None,
+        system_prompt_paths: list[str] | None = None,
     ) -> list[str]:
         command = [self._bin, "--mode", "json"]
         if session_id:
@@ -554,7 +558,10 @@ class PiCliClient:
             command.extend(["--thinking", self._thinking])
         if self._tools:
             command.extend(["--tools", self._tools])
-        for path in self._system_prompt_files():
+        # Async callers pass prebuilt paths: building them runs git (memory
+        # auto-commit) and must stay off the event loop. The default keeps the
+        # sync path for tests and direct command inspection.
+        for path in system_prompt_paths if system_prompt_paths is not None else self._system_prompt_files():
             command.extend(["--append-system-prompt", path])
         # The clock rides the system channel, not the prompt: pi persists user
         # text into its own transcript, so a prompt-inline timestamp left one
@@ -641,11 +648,13 @@ class PiCliClient:
             )
         return self._worker_pool
 
-    def _refresh_worker_system_args(self, command: list[str]) -> list[str]:
+    async def _refresh_worker_system_args(self, command: list[str]) -> list[str]:
         # A pool lease may wait minutes behind another chat. Rebuild dynamic
         # system input after acquisition, not at the time it joined the queue.
+        # Memory auto-commit runs git here, so this must stay off the loop.
+        system_paths = await asyncio.to_thread(self._system_prompt_files)
         system_args = []
-        for value in [*self._system_prompt_files(), time_context()]:
+        for value in [*system_paths, time_context()]:
             system_args.extend(["--append-system-prompt", value])
         refreshed = []
         inserted = False
@@ -889,7 +898,9 @@ class PiCliClient:
         value = event.get("id")
         return value.strip() if isinstance(value, str) else ""
 
-    def _build_native_prompt(self, messages: list[dict[str, str]], *, include_preamble: bool) -> str:
+    def _build_native_prompt(
+        self, messages: list[dict[str, str]], *, include_preamble: bool, skill_summary: str | None = None
+    ) -> str:
         user_text = ""
         for message in reversed(messages):
             if str(message.get("role", "user")) == "user":
@@ -899,18 +910,27 @@ class PiCliClient:
         lines: list[str] = []
         if include_preamble:
             # Rules and memory ride `--append-system-prompt`; only the skill
-            # summary still needs prompt injection.
-            skill_summary = build_skill_summary()
-            if skill_summary:
+            # summary still needs prompt injection. Async callers pass the
+            # summary prebuilt off the event loop.
+            summary = skill_summary if skill_summary is not None else build_skill_summary()
+            if summary:
                 lines.extend(
                     [
                         "本机可用 skills 如下。若用户询问 skills，必须基于此列表回答，不要说当前环境没有加载 skill。",
-                        skill_summary,
+                        summary,
                         "",
                     ]
                 )
         lines.append(f"用户: {user_text}")
         return "\n".join(lines)
+
+    async def _build_native_prompt_async(
+        self, messages: list[dict[str, str]], *, include_preamble: bool
+    ) -> str:
+        # build_skill_summary walks the whole skills tree; on a large tree a
+        # sync call here stalls every concurrent session, scheduler and healthz.
+        summary = await asyncio.to_thread(build_skill_summary) if include_preamble else None
+        return self._build_native_prompt(messages, include_preamble=include_preamble, skill_summary=summary)
 
     def _get_or_create_session_id(self, session_key: str | None) -> tuple[str | None, bool]:
         """pi accepts an unknown `--session-id` and creates it, so Ferry owns

@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+# The whole chain (clock injection, /daily firing, day boundaries) used to run
+# on naive host-local time: a UTC host silently shifted 08:00 briefings and
+# period labels by hours. Anchor everything to one explicit zone instead.
+TIMEZONE = ZoneInfo(os.environ.get("FERRY_TIMEZONE", "Asia/Shanghai"))
 
 _PERIODS = ((4, "凌晨"), (8, "早上"), (10, "上午"), (13, "中午"), (17, "下午"), (22, "晚上"))
 
@@ -13,6 +20,10 @@ _DIRECTIVE = (
 )
 
 
+def local_now() -> datetime:
+    return datetime.now(TIMEZONE)
+
+
 def period(hour: int) -> str:
     for end, label in _PERIODS:
         if hour <= end:
@@ -21,7 +32,9 @@ def period(hour: int) -> str:
 
 
 def _day_stamp(day: datetime) -> str:
-    return f"{day.month}/{day.day} {WEEKDAYS[day.weekday()]}"
+    # Include the year: crossing into January, "昨天 12/31" vs "明天 1/1" left
+    # the model guessing the year for birthdays, bills and anniversaries.
+    return f"{day.year}/{day.month}/{day.day} {WEEKDAYS[day.weekday()]}"
 
 
 def time_context(now: datetime | None = None) -> str:
@@ -32,7 +45,7 @@ def time_context(now: datetime | None = None) -> str:
     2026-09-15 12:24 的注入完全正确，模型却把“明天生日”复读成了历史里的
     “下周三”（9/11 时正确）——所以昨天/明天/后天、本周/下周范围也由代码给出。
     """
-    now = now or datetime.now()
+    now = now or local_now()
     monday = now - timedelta(days=now.weekday())
     lines = [
         f"当前系统时间: {now:%Y-%m-%d %H:%M} {WEEKDAYS[now.weekday()]}（{period(now.hour)}）",

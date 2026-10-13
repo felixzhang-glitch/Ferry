@@ -146,16 +146,26 @@ class Collector:
             self._thread.start()
         return self
 
-    def emit(self, kind: str, **fields) -> None:
+    def emit(self, kind: str, **fields) -> bool:
+        """Queue one event. Returns False when the event was dropped.
+
+        The HTTP ingest turns a False into a 503 so the upstream sees real
+        backpressure instead of an "accepted" lie while events silently vanish.
+        Filtered kinds (not in KINDS / stopped) are not pressure drops: they
+        return True so they do not masquerade as collector overload.
+        """
         if kind not in KINDS or self._stop.is_set():
-            return
+            return True
         try:
             event = {'kind': kind, 'at': time.time(), **clean_fields(fields)}
             self.pending.put_nowait(event)
+            return True
         except queue.Full:
             self.dropped += 1
+            return False
         except Exception:
             self.dropped += 1
+            return False
 
     def update_runtime(self, *, mode: str | None = None, **gauges) -> None:
         with self._lock:

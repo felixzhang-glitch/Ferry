@@ -3,6 +3,17 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-10-13 · 安全加固与可靠性修复（全链路）+ pi 升级 1.2.0
+
+- 需求：三路并行代码审查发现 5 项高危与多项中危缺陷，按优先级修复；同时把 pi 从 0.84.2 升级到 1.2.0（旧版自带 undici 在 Node 22 下崩溃，pi-worker SDK 测试 10/14 失败）
+- 安全：微信 webhook 空 token 从"直接放行"改为 fail-closed 503（与 `/push/file` 同策略），比较改 `hmac.compare_digest`；`bin/server` 启动时自动生成 `WECHAT_WEBHOOK_TOKEN` 写回 `conf/.env`（sidecar 与主服务共用同一 secret，原本 sidecar 侧已支持只是服务端旁路）；sidecar HTTP `/send` `/send_file` 增加 Bearer 鉴权 + `/send_file` 目录白名单（`WECHAT_SIDECAR_FILE_ALLOWLIST`，bin/server 默认导出归档/生成图/接收图/pi 工作目录四个根，未配置即拒绝）；飞书 webhook 校验顺序改为先验 token 再分发事件类型，飞书 verification token 同样改常量时间比较
+- 并发与竞态：飞书入站图片从 handler 单例共享列表改为按轮次持有（此前会话 B 的收尾清理会删掉会话 A 正在用的图片文件）；生成图发现增加跨轮声明注册表 + 收紧"图"字启发式（`张图/图片/生成图` 等复合词，不再命中"图表/地图/试图"）；文件归档改 `O_EXCL` 原子创建消除同名 TOCTOU 覆盖
+- 可靠性：提醒投递失败从"孤儿等重启"改为进程内 5 次重试（60s 间隔，构造参数可注入）；daily 循环崩溃后 60s 退避自动重启（此前静默停摆）；飞书 WS 线程崩溃/退出后带退避监督重启 + shutdown 置停达闸门；sidecar `saveSyncBuf` 软失败不再中断消息处理（此前磁盘故障 = 微信通道静默全丢且 healthz 全绿）；sidecar monitor 改串行处理 + 先处理后推进 sync buf（保序 + 崩溃只重放未处理尾部，主服务去重吸收）
+- 性能与工程：pi_cli 会话链路上的 memory git 提交与 skills 全量遍历改 `asyncio.to_thread`（此前每轮可阻塞事件循环 45s，同函数在 handler 侧早已用 to_thread）；飞书资源下载改流式累计 + 30MB 上限（`FEISHU_DOWNLOAD_MAX_MB`）；`ActiveTaskRegistry` 增加 1h 过期回收防会话永久锁死；telemetry `emit` 返回真实丢弃状态（web ingest 的 503 背压不再是死代码）；取消后图片自动完成会收尾流式卡片；空 @提及不再伪装成"发送了一张图片"；clock 日期戳补年份 + 全链路时区显式锚定 `FERRY_TIMEZONE`（默认 Asia/Shanghai，daily 触发时刻随之锚定）；`bin/server` 前台启动写 pid 文件
+- pi 升级：`@earendil-works/pi-coding-agent` 0.84.2 → 1.2.0（nvm node22 前缀安装，`/root/.local/bin/pi` 包装脚本不变）。行为差异已验证：1.2.0 会把每轮 system 消息（含 `--append-system-prompt` 注入内容）写入 transcript 用于回放，但会话投影只取最新一条——模型请求仍每轮新鲜注入、不含旧内容（pi-worker 测试断言覆盖该契约）；worker 的 `SUPPORTED_VERSION` 与测试版本断言同步更新
+- 验证：`pytest -q` 879 passed / 5 skipped；`node --test tests/wechat-sidecar.test.mjs` 20 pass；`pi-worker.test.mjs` 须用 node ≥22.19 运行（`/root/.nvm/versions/node/v22.23.2/bin/node --test`），升级后 14/14 全过（升级前 4/14）；`bash -n bin/server` 通过
+- 影响：`lib/python/channel/`（feishu handler/client/models/ws_client、wechat handler）、`lib/js/`（wechat-sidecar、pi-worker）、`lib/python/core/`（pi_cli、pi_worker、三个 session 组件）、`lib/python/app/`（main、clock）、`lib/python/observability/telemetry.py`、`bin/server`、`conf/.env.example`；`conf/.env` 由 bin/server 自动追加 webhook token（本地文件不入库）
+
 ## 2026-09-29 · calorie-lite 技能入库
 
 - 需求：把本地 `calorie-coach` 技能瘦身为单发估算版入库供 pi 日常使用——不追问份量、不多轮确认，缺克重按默认份直接估（±30% 容差），给了克重则按 ±15% 精确算；热量数值仍必须由脚本查表计算（中国食物成分表第 6 版 + 51 道家常配方），杜绝模型心算

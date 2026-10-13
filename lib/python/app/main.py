@@ -84,9 +84,10 @@ async def push_daily_result(channel: str, target_id: str, text: str, trace_id: s
     content = normalize_reply_text(text) or "(空响应)"
     chunks = split_message_text(content, max_chars=settings.wechat_message_chunk_chars)
     base_url = settings.wechat_sidecar_base_url.rstrip("/")
+    headers = _sidecar_auth_headers()
     async with httpx.AsyncClient(timeout=30.0) as client:
         for chunk in chunks:
-            response = await client.post(f"{base_url}/send", json={"to": target_id, "text": chunk})
+            response = await client.post(f"{base_url}/send", json={"to": target_id, "text": chunk}, headers=headers)
             response.raise_for_status()
 
 
@@ -161,14 +162,21 @@ def _feishu_receive_id_type(receive_id: str) -> str:
     return "chat_id"
 
 
+def _sidecar_auth_headers() -> dict[str, str]:
+    """Bearer header shared with the sidecar's /send and /send_file routes."""
+    token = settings.wechat_webhook_token.strip()
+    return {"authorization": f"Bearer {token}"} if token else {}
+
+
 async def _push_file_to_wechat(to: str, file_path: str, caption: str) -> dict[str, Any]:
     base_url = settings.wechat_sidecar_base_url.rstrip("/")
+    headers = _sidecar_auth_headers()
     # Encrypting plus CDN transfer far exceeds the text-push timeout.
     async with httpx.AsyncClient(timeout=180.0) as client:
         if caption:
-            caption_response = await client.post(f"{base_url}/send", json={"to": to, "text": caption})
+            caption_response = await client.post(f"{base_url}/send", json={"to": to, "text": caption}, headers=headers)
             caption_response.raise_for_status()
-        response = await client.post(f"{base_url}/send_file", json={"to": to, "path": file_path})
+        response = await client.post(f"{base_url}/send_file", json={"to": to, "path": file_path}, headers=headers)
     if response.status_code != 200:
         raise RuntimeError(f"wechat sidecar {response.status_code}: {response.text[:300]}")
     payload = response.json()
@@ -321,10 +329,16 @@ async def startup_event() -> None:
         group_require_mention=settings.feishu_group_require_mention,
     )
     feishu_ws.start_in_thread()
+    app.state.feishu_ws = feishu_ws
 
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
+    # Gate the WS thread before closing the agent: late events would otherwise
+    # hit an already-closed client and answer with transport errors.
+    ws = getattr(app.state, "feishu_ws", None)
+    if ws is not None:
+        ws.stop()
     memory.auto_commit(settings)
     await daily_scheduler.close()
     await reminder_scheduler.close()

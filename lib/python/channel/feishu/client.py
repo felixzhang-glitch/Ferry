@@ -534,7 +534,7 @@ class FeishuClient:
             trace_id=trace_id,
             event="feishu.download_image",
         )
-        return response.content, content_type
+        return response, content_type
 
     async def download_message_file(self, message_id: str, file_key: str, trace_id: str) -> tuple[bytes, str]:
         if not message_id or not file_key:
@@ -550,7 +550,7 @@ class FeishuClient:
             trace_id=trace_id,
             event="feishu.download_file",
         )
-        return response.content, content_type
+        return response, content_type
 
     async def create_reaction(
         self,
@@ -805,19 +805,25 @@ class FeishuClient:
         params: dict[str, str],
         trace_id: str,
         event: str,
-    ) -> tuple[httpx.Response, str]:
+    ) -> tuple[bytes, str]:
         attempts = self._retry_attempts()
         last_error: Exception | None = None
         started = time.monotonic()
+        # Stream with a hard cap: a group member can post arbitrarily large
+        # media, and an unbounded read would spike memory on the shared client.
+        max_bytes = int(getattr(self._settings, "feishu_download_max_mb", 30) or 30) * 1024 * 1024
 
         for attempt in range(attempts + 1):
             token = await self._get_tenant_access_token(trace_id=trace_id)
+            response: httpx.Response | None = None
             try:
-                response = await self._client.get(
+                request = self._client.build_request(
+                    "GET",
                     url,
                     params=params,
                     headers={"Authorization": f"Bearer {token}"},
                 )
+                response = await self._client.send(request, stream=True)
             except httpx.RequestError as exc:
                 last_error = exc
                 if attempt >= attempts:
@@ -825,37 +831,65 @@ class FeishuClient:
                 await self._sleep_before_retry(attempt)
                 continue
 
-            content_type = response.headers.get("content-type", "")
-            if response.status_code < 400 and not content_type.startswith("application/json"):
-                self._log_transport(
-                    event=event,
-                    trace_id=trace_id,
-                    status_code=response.status_code,
-                    started=started,
-                    attempt=attempt,
-                )
-                return response, content_type
+            try:
+                content_type = response.headers.get("content-type", "")
+                if response.status_code < 400 and not content_type.startswith("application/json"):
+                    chunks: list[bytes] = []
+                    total = 0
+                    too_large = False
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > max_bytes:
+                            too_large = True
+                            break
+                        chunks.append(chunk)
+                    if too_large:
+                        logger.error(
+                            "feishu resource exceeds download size cap",
+                            extra={
+                                "trace_id": trace_id,
+                                "event": event,
+                                "status_code": response.status_code,
+                                "max_bytes": max_bytes,
+                            },
+                        )
+                        raise FeishuClientError(
+                            f"feishu resource exceeds download size cap of {max_bytes} bytes"
+                        )
+                    content = b"".join(chunks)
+                    self._log_transport(
+                        event=event,
+                        trace_id=trace_id,
+                        status_code=response.status_code,
+                        started=started,
+                        attempt=attempt,
+                    )
+                    return content, content_type
 
-            data = self._try_parse_json(response)
-            if response.status_code == 401:
-                await self._clear_tenant_access_token()
-                if attempt < attempts:
-                    await self._sleep_before_retry(attempt)
-                    continue
+                await response.aread()
+                data = self._try_parse_json(response)
+                if response.status_code == 401:
+                    await self._clear_tenant_access_token()
+                    if attempt < attempts:
+                        await self._sleep_before_retry(attempt)
+                        continue
 
-            if attempt >= attempts or not self._is_retryable_response(response=response, data=data):
-                logger.error(
-                    "feishu resource download failed",
-                    extra={
-                        "trace_id": trace_id,
-                        "event": event,
-                        "status_code": response.status_code,
-                        "error_code": data.get("code"),
-                    },
-                )
-                raise FeishuClientError(f"feishu resource download failed: {data or response.status_code}")
+                if attempt >= attempts or not self._is_retryable_response(response=response, data=data):
+                    logger.error(
+                        "feishu resource download failed",
+                        extra={
+                            "trace_id": trace_id,
+                            "event": event,
+                            "status_code": response.status_code,
+                            "error_code": data.get("code"),
+                        },
+                    )
+                    raise FeishuClientError(f"feishu resource download failed: {data or response.status_code}")
 
-            await self._sleep_before_retry(attempt)
+                await self._sleep_before_retry(attempt)
+            finally:
+                if response is not None:
+                    await response.aclose()
 
         raise FeishuClientError(f"feishu request failed: {last_error}")
 
