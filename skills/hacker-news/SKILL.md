@@ -14,7 +14,6 @@ description: 查询 Hacker News 数据:top/new/best/ask/show/job 榜单及详情
 ```bash
 ~/.bun/bin/bun <skill-dir>/scripts/hackerNews.mjs <cmd> [args] [--flags]
 # 或 node <skill-dir>/scripts/hackerNews.mjs <cmd>
-# 本机全局副本(可选): ~/.bun/bin/bun ~/.agents/skills/hacker-news/scripts/hackerNews.mjs
 ```
 
 ## 子命令

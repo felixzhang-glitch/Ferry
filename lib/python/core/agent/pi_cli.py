@@ -15,7 +15,7 @@ from typing import Any
 from app import memory
 from app.clock import time_context
 from app.config import Settings
-from app.skills import build_skill_summary
+from app.skills import SKILL_ROOTS, build_skill_summary
 from core.agent.types import AgentClientCancelled, AgentClientError, ProgressCallback
 from core.agent.pi_worker import PiWorkerLease, PiWorkerPool
 from observability.telemetry import observe_agent, observe_attempt, record_pi_event
@@ -549,7 +549,10 @@ class PiCliClient:
         image_paths: list[str] | None = None,
         system_prompt_paths: list[str] | None = None,
     ) -> list[str]:
-        command = [self._bin, "--mode", "json"]
+        command = [self._bin, "--mode", "json", "--no-skills"]
+        # Repo skills ride the system-prompt summary (app.skills); pi's own
+        # discovery is disabled so ~/.agents/skills and other global CLI dirs
+        # never leak skills into the bridge.
         if session_id:
             command.extend(["--session-id", session_id])
         if self._model:
@@ -914,9 +917,13 @@ class PiCliClient:
             # summary prebuilt off the event loop.
             summary = skill_summary if skill_summary is not None else build_skill_summary()
             if summary:
+                # Anchor the skills root so `<skill-dir>` placeholders inside
+                # SKILL.md files resolve to the repo copy, not a global one.
+                skill_root = SKILL_ROOTS[0] if SKILL_ROOTS else "skills/"
                 lines.extend(
                     [
                         "本机可用 skills 如下。若用户询问 skills，必须基于此列表回答，不要说当前环境没有加载 skill。",
+                        f"技能根目录: {skill_root}，各 SKILL.md 中的 <skill-dir> 指 {skill_root}/<name>。",
                         summary,
                         "",
                     ]

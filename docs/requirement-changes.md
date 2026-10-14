@@ -3,6 +3,14 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-10-14 · skills 收口为仓库唯一来源（pi 停用原生技能发现）
+
+- 需求：`app/skills.py` 的设计意图是桥接层只认仓库 `skills/`，不捡其他 agent 装的全局技能；但 pi 进程未传 `--no-skills`，原生发现仍开着，实际加载了 `~/.agents/skills` 下 5 个 skill（与 Claude Code 等共享的全局目录，新装 skill 会静默混入 IM 助理，同名 skill 与仓库清单双重注入）
+- 改动：`pi_cli.py` `_build_command` 固定前缀追加 `--no-skills`（worker 模式复用同一份 args，单点覆盖全链路）；首轮回合技能摘要前导新增「技能根目录」锚点行，让各 SKILL.md 的 `<skill-dir>` 占位符解析到仓库目录；`skills/iqs-search/SKILL.md` 22 处 `/Users/yunhao/...` Mac 过期路径改 `<skill-dir>`（此前靠 `~/.agents/skills` 全局副本兜底，收口后必须指向仓库）；`skills/hacker-news/SKILL.md` 删除全局副本可选指引，对齐仓库唯一来源
+- 边界：`--no-skills` 只关 pi 技能注入通道，模型经文件工具读机器文件的能力不受限；`~/.agents/skills` 目录本身保留（其他 agent 在用）
+- 验证：`cd conf && pytest -q` 879 passed / 5 skipped（新增 `--no-skills` 与「技能根目录」锚点断言）；`grep -c '/Users/' skills/iqs-search/SKILL.md` 归零
+- 影响：`lib/python/core/agent/pi_cli.py`、`skills/iqs-search/SKILL.md`、`skills/hacker-news/SKILL.md`、`tests/test_pi_session.py`
+
 ## 2026-10-13 · 安全加固与可靠性修复（全链路）+ pi 升级 1.2.0
 
 - 需求：三路并行代码审查发现 5 项高危与多项中危缺陷，按优先级修复；同时把 pi 从 0.84.2 升级到 1.2.0（旧版自带 undici 在 Node 22 下崩溃，pi-worker SDK 测试 10/14 失败）

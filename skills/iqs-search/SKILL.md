@@ -8,7 +8,7 @@ description: Real-time web search (text/image), page reading, weather query and 
 ## 前置条件
 
 - bun（脚本使用原生 fetch API，无外部依赖）
-- 脚本绝对路径前缀：`/Users/yunhao/.qoder/skills/iqs-search`（下文示例均用绝对路径，任何 cwd 下可直接执行）
+- `<skill-dir>` 指本 skill 目录，即仓库内 `skills/iqs-search/` 的绝对路径（下文示例配合技能根目录使用，任何 cwd 下可直接执行）
 
 ## 适用场景
 
@@ -195,77 +195,77 @@ description: Real-time web search (text/image), page reading, weather query and 
 
 ```bash
 # 基础搜索（默认仅标题/摘要/链接，最省 token）
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/search.mjs --query "量子计算原理"
+bun <skill-dir>/scripts/search.mjs --query "量子计算原理"
 
 # 实时信息
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/search.mjs --query "最新金融政策" --engineType Generic --timeRange OneWeek
+bun <skill-dir>/scripts/search.mjs --query "最新金融政策" --engineType Generic --timeRange OneWeek
 
 # 返回完整正文 + 增强摘要
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/search.mjs --query "AI 法案" --contents mainText,summary
+bun <skill-dir>/scripts/search.mjs --query "AI 法案" --contents mainText,summary
 
 # 富文本正文（保留表格/代码，适合技术文档）
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/search.mjs --query "React Server Components 原理" --contents richMainBody
+bun <skill-dir>/scripts/search.mjs --query "React Server Components 原理" --contents richMainBody
 
 # 深度搜索（复杂研究问题）
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/search.mjs --query "对比 2025 年主流向量数据库的性能与成本" --engineType Deep
+bun <skill-dir>/scripts/search.mjs --query "对比 2025 年主流向量数据库的性能与成本" --engineType Deep
 
 # 多结果 + 精确日期区间
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/search.mjs --query "新能源汽车销量" --numResults 25 --startDate 2026-08-01 --endDate 2026-08-31
+bun <skill-dir>/scripts/search.mjs --query "新能源汽车销量" --numResults 25 --startDate 2026-08-01 --endDate 2026-08-31
 
 # 垂域分类（金融）
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/search.mjs --query "央行降准" --category finance
+bun <skill-dir>/scripts/search.mjs --query "央行降准" --category finance
 
 # 天气查询（结构化数据在 sceneItems）
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/search.mjs --query "今日天气" --city "成都市"
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/search.mjs --query "明天会下雨吗" --ip "117.136.110.23"
+bun <skill-dir>/scripts/search.mjs --query "今日天气" --city "成都市"
+bun <skill-dir>/scripts/search.mjs --query "明天会下雨吗" --ip "117.136.110.23"
 ```
 
 ### ReadPage
 
 ```bash
 # Markdown 格式读取（scrape 动态渲染，默认）
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/readpage.mjs --url "https://example.com/article" --extractArticle
+bun <skill-dir>/scripts/readpage.mjs --url "https://example.com/article" --extractArticle
 
 # 静态页面用 basic 模式更快
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/readpage.mjs --url "https://example.com/docs" --mode basic
+bun <skill-dir>/scripts/readpage.mjs --url "https://example.com/docs" --mode basic
 
 # 多格式 + 强制不用缓存
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/readpage.mjs --url "https://example.com/article" --formats markdown,text --maxAge 0
+bun <skill-dir>/scripts/readpage.mjs --url "https://example.com/article" --formats markdown,text --maxAge 0
 
 # actions：等待懒加载元素出现再提取
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/readpage.mjs --url "https://example.com/list" --actions '[{"type":"wait","selector":"#list","timeout":10000}]'
+bun <skill-dir>/scripts/readpage.mjs --url "https://example.com/list" --actions '[{"type":"wait","selector":"#list","timeout":10000}]'
 
 # actions：先点掉弹窗再读
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/readpage.mjs --url "https://example.com/article" --actions '[{"type":"eval","scripts":"document.querySelector(\"#cookie-accept\")?.click()"},{"type":"wait","duration":800}]'
+bun <skill-dir>/scripts/readpage.mjs --url "https://example.com/article" --actions '[{"type":"eval","scripts":"document.querySelector(\"#cookie-accept\")?.click()"},{"type":"wait","duration":800}]'
 
 # 省 token：剔除图片/链接/表单导航
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/readpage.mjs --url "https://example.com/article" --extractArticle --excludeImages --excludeLinks --excludedTags form,nav,footer
+bun <skill-dir>/scripts/readpage.mjs --url "https://example.com/article" --extractArticle --excludeImages --excludeLinks --excludedTags form,nav,footer
 ```
 
 ### Nearby POI
 
 ```bash
 # 指定场景
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/nearby.mjs --query "杭州灵隐寺附近5km的高档酒店" --scene hotels
+bun <skill-dir>/scripts/nearby.mjs --query "杭州灵隐寺附近5km的高档酒店" --scene hotels
 
 # 自动识别场景
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/nearby.mjs --query "西湖附近好玩的地方"
+bun <skill-dir>/scripts/nearby.mjs --query "西湖附近好玩的地方"
 
 # 精简模式
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/nearby.mjs --query "北京国贸附近的川菜餐厅" --scene restaurants --searchModel single --limit 5
+bun <skill-dir>/scripts/nearby.mjs --query "北京国贸附近的川菜餐厅" --scene restaurants --searchModel single --limit 5
 ```
 
 ### ImageSearch
 
 ```bash
 # 基础搜图
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/imagesearch.mjs --query "成都大熊猫"
+bun <skill-dir>/scripts/imagesearch.mjs --query "成都大熊猫"
 
 # 增强引擎 + 20 条
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/imagesearch.mjs --query "川西雪山风景" --engineType MultimodalSpeedAdvanced --numResults 20
+bun <skill-dir>/scripts/imagesearch.mjs --query "川西雪山风景" --engineType MultimodalSpeedAdvanced --numResults 20
 
 # 排除站点
-bun /Users/yunhao/.qoder/skills/iqs-search/scripts/imagesearch.mjs --query "羽毛球拍" --excludeSites "pinterest.com,taobao.com"
+bun <skill-dir>/scripts/imagesearch.mjs --query "羽毛球拍" --excludeSites "pinterest.com,taobao.com"
 ```
 
 ## 输出验证
