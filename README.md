@@ -1,17 +1,16 @@
 # Ferry
 
+> 能力归于 pi agent，编排归于 Ferry
 
-> 能力回归 pi agent，编排归于 Ferry
-
-Ferry 是一个私人定制版本助理Agent
+Ferry 是一个个人定制的 IM 助理：飞书和微信的消息进来，交给 pi CLI 思考，再把回复送回去。它不生产智能，只负责收发、适配与守护
 
 ## 设计哲学
 
-两条原则决定了这个项目的形状
+两条原则决定了这个项目的形状：
 
-**pi-native**：pi 原生支持的能力，桥接层不重复实现。会话靠 pi 的 `--session-id` 续接，压缩靠 pi 自己管，工具调用由 pi 承担。桥接层每轮只发当前这一条消息，历史一字不带
+**pi-native**：pi 原生支持的能力，桥接层不重复实现。会话靠 pi 的 `--session-id` 续接，压缩由 pi 自己管，工具调用交给 pi 承担。桥接层每轮只发当前这一条消息，历史一字不带
 
-**桥接不膨胀**：不做 prompt 工程，不做 RAG，不做 workflow 引擎，不为想象中的多后端预留路由框架。单实例、文件持久化，不引入 Redis 和数据库。一个个人项目，简单本身就是功能
+**桥接不膨胀**：不做 prompt 工程，不做 RAG，不做 workflow 引擎，不为想象中的多后端预留路由框架。单实例、文件持久化，不引入 Redis 和数据库。对个人项目而言，简单本身就是功能
 
 ## 架构
 
@@ -41,7 +40,7 @@ flowchart LR
     OUT --> WX
 ```
 
-一次请求的完整路径
+一次请求的完整路径：
 
 ```mermaid
 sequenceDiagram
@@ -64,34 +63,34 @@ sequenceDiagram
 ## 能力
 
 - 双渠道对话：飞书走 WS 长连接，微信走 Node.js sidecar 长轮询，共享同一套会话逻辑
-- 飞书渐进式回复：占位卡先落地，pi 跑工具时卡片显示当前在跑的工具，正文到达后逐步覆盖同一张卡（微信整段回复不变）
+- 飞书渐进式回复：占位卡先落地，pi 跑工具时卡片同步显示当前在跑的工具，正文到达后逐步覆盖同一张卡（微信保持整段回复）
 - 会话隔离与秩序：渠道会话 key → pi session 映射，消息去重，FIFO 排队，任务可取消
-- pi 生命周期管理：超时、重试、熔断、取消回收；部分流式输出后不重试，避免答一半重来
-- 文件与图片：入站图片经 pi 原生 `@file` 多模态喂给模型（飞书图文混排、微信图片均可），文件归档后附件通知搭载下一条消息，双渠道文件推送
+- pi 生命周期管理：超时、重试、熔断、取消回收；已流出部分内容则不再重试，避免答一半重来
+- 文件与图片：入站图片经 pi 原生 `@file` 多模态喂给模型（飞书图文混排、微信图片均可），文件归档后随下一条消息附件通知，双渠道文件推送
 - 长期记忆与规则：`rules/` 与记忆经 `--append-system-prompt` 每轮注入，时间与时段走 system prompt，不污染 transcript
-- 定时能力：`/remind` 一次性提醒，`/daily` 每日任务，均持久化到本地文件
-- 私有可观测：独立看板进程统计轮次、阶段耗时、Token、工具与回发结果，另从 pi 原生历史只读采集全量 Token 用量；只看运行状态，不采集聊天正文
+- 定时能力：`/remind` 一次性提醒、`/daily` 每日任务，均持久化到本地文件
+- 私有可观测：独立看板进程统计轮次、阶段耗时、Token、工具与回发结果，另从 pi 原生历史只读采集全量 Token 用量；只看运行状态，不看聊天正文
 
 ## 快速开始
 
-前置条件：Python 3.13+、可用的 pi CLI（先完成模型配置）、微信接入另需 Node.js
+前置条件：Python 3.13+、可用的 pi CLI（先完成模型配置）；微信接入另需 Node.js
 
 ```bash
-# 仅首次创建，保留已有配置
+# 仅首次创建，已有配置则保留
 [ -f conf/.env ] || cp conf/.env.example conf/.env
 
 python3 -m venv .venv
 .venv/bin/python -m pip install -r conf/requirements.txt
 ```
 
-编辑 `conf/.env`，填写飞书凭证 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，确认 `PI_CLI_BIN`、`PI_MODEL` 及模型服务凭证。候选模型在 `conf/pi/models.json`，启动时自动同步到 `~/.pi/agent/models.json`
+编辑 `conf/.env`：填写飞书凭证 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，确认 `PI_CLI_BIN`、`PI_MODEL` 及模型服务凭证。候选模型在 `conf/pi/models.json`，启动时自动同步到 `~/.pi/agent/models.json`
 
 ```bash
 ./bin/server start
 ./bin/server status
 ```
 
-微信首次登录与独立启动
+微信首次登录与独立启动：
 
 ```bash
 ./bin/server wx login
@@ -100,7 +99,7 @@ python3 -m venv .venv
 
 ### Supervisor 托管
 
-生产部署走 Supervisor 时，`./bin/server` 会自动检测并提示使用 supervisorctl，无需手动区分
+生产部署走 Supervisor 时，`./bin/server` 会自动检测并提示使用 supervisorctl，无需手动区分：
 
 ```bash
 supervisorctl status
@@ -112,7 +111,7 @@ curl --fail http://127.0.0.1:8080/healthz
 
 ### 私有可观测看板
 
-独立进程，默认 `127.0.0.1:38080/observability`，与主服务分开启停（Supervisor program 名 `ferry-observability`）。看板只回答"跑得怎么样"，不回答"聊了什么"：采集业务轮次、pi 尝试、可见模型响应、工具调用、队列与渠道回发结果，不采集聊天正文、思考、工具参数与结果、文件名与路径、原始报错；会话只以 HMAC 去标识化 ID 出现，且不作为 Prometheus 标签
+独立进程，默认 `127.0.0.1:38080/observability`，与主服务分开启停（Supervisor program 名 `ferry-observability`）。看板只回答「跑得怎么样」，不回答「聊了什么」：采集业务轮次、pi 尝试、可见模型响应、工具调用、队列与渠道回发结果，不采集聊天正文、思考、工具参数与结果、文件名与路径、原始报错；会话只以 HMAC 去标识化 ID 出现，且不作为 Prometheus 标签
 
 ```bash
 ./bin/server obs credentials   # 首次生成私有配置，显示随机密码；已有凭证不覆盖
@@ -122,7 +121,7 @@ curl --fail http://127.0.0.1:8080/healthz
 ssh -N -L 38080:127.0.0.1:38080 <服务器>
 ```
 
-页面按时间窗口、渠道、模型筛选，五个页签
+页面按时间窗口、渠道、模型筛选，共五个页签：
 
 | 页签 | 内容 |
 |---|---|
@@ -132,7 +131,7 @@ ssh -N -L 38080:127.0.0.1:38080 <服务器>
 | 可靠性 | 错误轮次、取消轮次、重试、回发失败；采集质量（丢弃事件、写入错误、无效行、缺失用量）与告警 |
 | 运行状态 | 主服务资源与运行快照，不随窗口和渠道筛选 |
 
-访问控制分三层，凭证互不通用
+访问控制分三层，凭证互不通用：
 
 | 入口 | 凭证 |
 |---|---|
@@ -142,7 +141,7 @@ ssh -N -L 38080:127.0.0.1:38080 <服务器>
 
 凭证只存 `conf/.env.observability`（0600、gitignored），由 `./bin/server obs credentials` 生成，不提供默认密码，明文密码不落盘也不入日志；只读 Token 与写 Token 不允许同值，配置校验直接拒绝
 
-对外部署示例地址 `https://observability.example.com/observability`（替换为自己的域名），后端可监听 `0.0.0.0:38080` 并设 `OBSERVABILITY_COOKIE_SECURE=true`，不要用裸 HTTP 38080 提交登录密码。上面的 SSH 隧道方式适用于回环监听 + 关闭 Secure Cookie 的私有部署。Supervisor / Nginx 安装、完整接口清单、数据保留与完整性限制见 [运维说明](docs/RELIABILITY.md)
+对外部署：示例地址 `https://observability.example.com/observability`（替换为自己的域名），后端可监听 `0.0.0.0:38080` 并设 `OBSERVABILITY_COOKIE_SECURE=true`，不要用裸 HTTP 38080 提交登录密码。上面的 SSH 隧道方式适用于回环监听 + 关闭 Secure Cookie 的私有部署。Supervisor / Nginx 安装、完整接口清单、数据保留与完整性限制见 [运维说明](docs/RELIABILITY.md)
 
 #### pi 历史 Token 用量
 
@@ -155,7 +154,7 @@ ssh -N -L 38080:127.0.0.1:38080 <服务器>
 ./bin/server obs restart    # 启动后台持续同步，默认每 30 秒检查变化文件
 ```
 
-机器读取：`GET /api/observability/v1/usage?range=all`（custom 带 `start` / `end`，`refresh=1` 触发后台单飞同步），沿用同一只读 Token。用量存在独立不过期账本 `runtime/observability/pi-usage/index.json`，不受运行事件 30 天保留期限制；上下文压缩与分支摘要用量计入消耗但不增加用户轮次，费用不估算
+机器读取：`GET /api/observability/v1/usage?range=all`（custom 带 `start` / `end`，`refresh=1` 触发后台单飞同步），沿用同一只读 Token。用量存在独立的不过期账本 `runtime/observability/pi-usage/index.json`，不受运行事件 30 天保留期限制；上下文压缩与分支摘要的用量计入消耗但不增加用户轮次，费用不估算
 
 > 边界：运行事件从启用后开始采集，不回填聊天历史；读端最多缓存 200000 条，达上限明确提示不完整。写盘失败或队列溢出不阻断 IM，但未落盘事件在异常退出时可能丢失；未闭合轮次显示运行中或未知，不补成成功。Prometheus counter 随进程重启归零，`/healthz` 只说明观测 HTTP 存活
 
