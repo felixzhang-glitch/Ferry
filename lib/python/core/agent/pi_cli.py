@@ -62,6 +62,7 @@ class PiCliClient:
         self._agent_dir = settings.pi_agent_dir.strip()
         self._api_key = settings.pi_api_key.strip()
         self._deepseek_api_key = settings.pi_deepseek_api_key.strip()
+        self._bailian_plan_api_key = settings.pi_bailian_plan_api_key.strip()
         self._offline = settings.pi_offline
         self._approve_project = settings.pi_approve_project
         self._timeout_seconds = (
@@ -626,6 +627,8 @@ class PiCliClient:
             env["DASHSCOPE_API_KEY"] = self._api_key
         if self._deepseek_api_key:
             env["DEEPSEEK_API_KEY"] = self._deepseek_api_key
+        if self._bailian_plan_api_key:
+            env["BAILIAN_PLAN_API_KEY"] = self._bailian_plan_api_key
         if self._offline:
             env["PI_OFFLINE"] = "1"
         if self._agent_dir:

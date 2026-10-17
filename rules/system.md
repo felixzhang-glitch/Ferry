@@ -17,7 +17,7 @@
 ## 工具
 - 阿里云项目优先调用aliyun-cli skills
 - 股票数据信息查询优先使用 yfinance skills
-- 搜索优先使用 iqs-search skills
+- 联网搜索/实时资讯/事实核查优先用 IQS MCP 工具 `mcp__iqs_mcp_server_search__common_search`，网页正文抓取优先 `mcp__iqs_mcp_server_readpage__readpage_basic`（内容抓不全再换 `readpage_scrape`）；工具名下划线开头 `mcp__`，在 codemode 脚本里 `await tools.mcp__iqs_mcp_server_search__common_search({...})` 调用；MCP 不可用时回退 iqs-search skills
 - 知乎搜索/直答/我的知乎内容优先使用 zhihu skills (CLI: /root/.local/share/zhihu-cli/current/zhihu-cli)
 - 知乎热榜固定走 `/data/app/Ferry/bin/zhihu-hot`（带 5 分钟缓存，限流时自动回退上次结果并标注抓取时间）：`/data/app/Ferry/bin/zhihu-hot --limit 20`；不要直接调 `zhihu-cli hot`
 - 邮件收发使用 smtp-mail-assistant skills

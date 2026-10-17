@@ -3,6 +3,43 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-10-17 · pi 接入阿里云 IQS MCP 服务（search / readpage）
+
+- 需求：为 pi 配置阿里云 IQS 两个 streamable HTTP MCP 服务，搜索/网页抓取优先走 MCP 而非 iqs-search skills
+- 改动：`pi mcp add` 写入 `~/.pi/agent/mcp.json`（全局，key 在本地不入库）：`iqs-mcp-server-search`（common_search）、`iqs-mcp-server-readpage`（readpage_basic / readpage_scrape）；`rules/system.md` 工具优先级改为 MCP 优先、iqs-search skills 回退
+- 验证：`pi mcp list` 两服务 connected（3 工具）；worker 级端到端 probe：pi 以 `--model bailian-plan/deepseek-v4.1-flash` 在 codemode 里调 `mcp__iqs_mcp_server_search__common_search` 成功返回真实搜索结果（注意 pi 把服务名归一为下划线，且 codemode 暴露、需从 codemode 脚本调用）；Ferry 启动 pi 仅传 `--no-skills`，未禁 MCP，无需代码改动
+- 影响：`rules/system.md`、`~/.pi/agent/mcp.json`（本地不入库）；pi 重启后自动生效
+
+## 2026-10-15 · 模型再切为百炼 Standard 套餐 deepseek-v4.1-flash
+
+- 需求：用户要求换模型为 `deepseek-v4.1-flash`（套餐端点 /models 已确认在列）
+- 改动：`conf/pi/models.json` bailian-plan provider 注册 `deepseek-v4.1-flash`（无 thinkingFormat，openai 默认通道，与 bailian 的 deepseek 系一致）；`conf/.env` `PI_MODEL=bailian-plan/deepseek-v4.1-flash`（key 沿用 `BAILIAN_PLAN_API_KEY`，无需代码改动）
+- 验证：套餐端点直连流式 thinking 正确分离（reasoning_content 1140 字 / 773 tokens）；worker 级端到端 probe：110 个 `thinking_delta` 全部被过滤、仅 19 字干净正文下发；重启后双 worker ready、回归 879 passed / 5 skipped
+- 影响：`conf/pi/models.json`、`conf/.env`（本地不入库）；重启 `ferry-stack` 生效
+
+## 2026-10-15 · 切换后端模型为百炼 Standard 套餐 qwen3.8-flash（glm-5.3-prime 思考外泄问题暂停）
+
+- 需求：glm-5.3-prime 存在「思考内容混入正文发给用户」的问题（见下），用户决定先换模型；已订阅阿里云百炼 Standard 套餐，切到 `qwen3.8-flash`，走套餐专属域名
+- 改动：`conf/pi/models.json` 新增 `bailian-plan` provider（baseUrl `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`，key 引用 `$BAILIAN_PLAN_API_KEY`，注册 qwen3.8-flash，qwen thinkingFormat）；`conf/.env` `PI_MODEL=bailian-plan/qwen3.8-flash`、新增 `BAILIAN_PLAN_API_KEY`；`conf/.env.example` 同步新增该 key 说明；`app/config.py` 新增 `pi_bailian_plan_api_key` 字段、`pi_cli.py` `_process_env` 注入 `BAILIAN_PLAN_API_KEY`（worker env 显式白名单制，漏配会报 "No API key found for bailian-plan"，测试 fixture 同步补字段）
+- 验证：套餐端点直连流式实测 thinking 正确分离（reasoning_content 625 tokens、正文干净、reasoning_tokens 计入 usage）；worker 级端到端 probe：110 个 `thinking_delta` 全部被 `_extract_text_delta` 过滤、仅 36 字干净正文经 `text_delta` 下发；pi --list-models 识别 `bailian-plan/qwen3.8-flash`；重启后 models.json 同步无未注册告警、双 worker ready；`cd conf && pytest -q` 879 passed / 5 skipped
+- 遗留（glm-5.3-prime 思考外泄，已暂停排查）：现象为 glm-5.3-prime 的 CoT 出现在 pi transcript 的 `text` block（而非 `thinking` block）且 `usage.reasoning=0`，经 `_extract_text_delta` 正常下发到通道；直连百炼（enable_thinking=true + reasoning_effort=low，含/不含 tools）思考均正确分离，qwen3.8-flash 历史会话（qwen thinkingFormat 同通道）192 轮也全部分离正常——差异锁定在 pi 1.2.0 实际下发的 glm 请求上，未能完整复现（本会话工具执行环境间歇故障）；若回切 glm 需先跑 worker 级 probe 确认 thinking 分离
+- 影响：`conf/pi/models.json`、`conf/.env`、`conf/.env.example`、`lib/python/app/config.py`、`lib/python/core/agent/pi_cli.py`、`tests/test_pi_session.py`、`tests/test_pi_multimodal.py`；重启 `ferry-stack` 生效
+
+## 2026-10-15 · 切换后端模型为百炼 glm-5.3-prime（reasoning_effort=low）
+
+- 需求：Ferry 唯一后端 pi 的模型从 `deepseek/deepseek-flash` 切到百炼 `glm-5.3-prime`（GLM-5.3 的 Prime 高速输出档），推理档位压到 `low`
+- 模型特性：GLM-5.3 思考强制开启（`enable_thinking` 只认 `true`），`reasoning_effort` 仅支持 `max|high|low`（默认 max）；上下文 1M、输出 128K、纯文本输入；Prime 档单价为标准版 2 倍（输入 ¥16/输出 ¥56 每百万 tokens）换 1.5~2 倍 TPS
+- 改动：`conf/pi/models.json` bailian provider 注册 `glm-5.3-prime`（`thinkingFormat: qwen`，与 qwen3.8-flash 同通道：下发 `enable_thinking=true` + `reasoning_effort`）；`conf/.env` `PI_MODEL=bailian/glm-5.3-prime`（`PI_THINKING` 已是 low，注释更新为 glm 档位语义）
+- 验证：直连百炼 API 实测 `glm-5.3-prime` + `reasoning_effort=low` 正常回复（`thinking:{type:enabled}` 形式，`reasoning_tokens=0`）；pi qwen thinkingFormat 下发的 `enable_thinking=true` 参数形式同步验证；重启后 `sync_pi_models` 无未注册告警
+- 影响：`conf/pi/models.json`、`conf/.env`（本地不入库）；重启 `ferry-stack` 生效；**当日已被 Standard 套餐切换取代**
+
+## 2026-10-14 · 修复 persistent worker 拒绝 `--no-skills` 导致双通道「服务繁忙」
+
+- 需求：上一条变更给 `_build_command` 加的 `--no-skills` 在 CLI 回退路径正常（pi 1.2.0 顶层 CLI 认该 flag），但 `PI_PERSISTENT_ENABLED=true` 的常驻 worker 走 `pi-worker.mjs` `parseRunArgs` 白名单，未收录该 flag，全部消息以 `Unsupported worker CLI argument` 失败，飞书/微信双通道回「服务繁忙，请稍后重试」
+- 改动：`pi-worker.mjs` `parseRunArgs` 新增 `--no-skills` 布尔 flag（含重复检测），映射到 pi SDK `DefaultResourceLoaderOptions.noSkills`，与 CLI 行为对齐——worker 模式下同样切断 `~/.agents/skills` 全局发现，仓库 skills 继续走 `--append-system-prompt` 摘要通道
+- 验证：`node --test --test-name-pattern "strict CLI subset"`（新增 noSkills 断言）；真实 SDK 端到端 probe（`--no-skills` → deepseek-flash 回 FERRY_OK、`ferry_done returncode=0`）；`cd conf && pytest -q` 879 passed / 5 skipped；重启后 worker pool 2 个 ready、日志无新 ERROR
+- 影响：`lib/js/pi-worker.mjs`、`tests/pi-worker.test.mjs`（本地不入库）；重启 `ferry-stack` 生效
+
 ## 2026-10-14 · skills 收口为仓库唯一来源（pi 停用原生技能发现）
 
 - 需求：`app/skills.py` 的设计意图是桥接层只认仓库 `skills/`，不捡其他 agent 装的全局技能；但 pi 进程未传 `--no-skills`，原生发现仍开着，实际加载了 `~/.agents/skills` 下 5 个 skill（与 Claude Code 等共享的全局目录，新装 skill 会静默混入 IM 助理，同名 skill 与仓库清单双重注入）

@@ -116,6 +116,8 @@ class Settings(BaseSettings):
     pi_api_key: str = Field(default="", validation_alias="DASHSCOPE_API_KEY")
     # Same resolution for the DeepSeek official endpoint (provider "deepseek").
     pi_deepseek_api_key: str = Field(default="", validation_alias="DEEPSEEK_API_KEY")
+    # Bailian Standard plan (token-plan endpoint, provider "bailian-plan").
+    pi_bailian_plan_api_key: str = Field(default="", validation_alias="BAILIAN_PLAN_API_KEY")
     pi_thinking: str = Field(default="high", validation_alias="PI_THINKING")
     pi_tools: str = Field(default="", validation_alias="PI_TOOLS")
     pi_agent_dir: str = Field(default="", validation_alias="PI_CODING_AGENT_DIR")
