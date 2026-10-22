@@ -2,134 +2,283 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <meta name="theme-color" content="#0a1530">
-  <title>Ferry · 个人可观测仪表盘</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#F9FAFB" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0F0F0F" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Ferry">
+  <meta name="format-detection" content="telephone=no">
+  <title>Ferry 控制台</title>
+  <link rel="manifest" href="/observability/manifest.webmanifest">
+  <link rel="icon" type="image/png" href="/static/console-icon-192.png">
+  <link rel="apple-touch-icon" href="/static/console-icon-180.png">
   <link rel="stylesheet" href="/static/dashboard.css">
+  <script src="/static/appearance.js" defer></script>
+  <script src="/static/notifications.js" defer></script>
   <script src="/static/dashboard.js" defer></script>
+  <script src="/static/console.js" defer></script>
+  <script src="/static/chat.js" defer></script>
 </head>
-<body>
+<body data-app-name="Ferry" data-app-revision="" data-app-avatar="false" data-icon-180="/static/console-icon-180.png" data-icon-192="/static/console-icon-192.png" data-icon-512="/static/console-icon-512.png" data-icon-maskable="/static/console-icon-maskable.png">
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2z"/><path d="M7 9h10M7 13h6"/></symbol>
+    <symbol id="i-overview" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></symbol>
+    <symbol id="i-performance" viewBox="0 0 24 24"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-6"/></symbol>
+    <symbol id="i-usage" viewBox="0 0 24 24"><path d="M5 20V10"/><path d="M12 20V4"/><path d="M19 20v-7"/></symbol>
+    <symbol id="i-reliability" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+    <symbol id="i-runtime" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h2l1.5-3 2 6 1.5-3h1"/></symbol>
+    <symbol id="i-memory" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 1 6 6c0 2.2-1.2 3.6-2.5 4.8-.9.8-1.5 1.7-1.5 2.9V18h-4v-1.3c0-1.2-.6-2.1-1.5-2.9C7.2 12.6 6 11.2 6 9a6 6 0 0 1 6-6z"/><path d="M10 21h4"/></symbol>
+    <symbol id="i-tasks" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h10"/><path d="M18 7h2"/><circle cx="16" cy="7" r="2"/><path d="M4 17h2"/><path d="M10 17h10"/><circle cx="8" cy="17" r="2"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="m15 5 4 4M4 20l5-1L20 8a2.8 2.8 0 0 0-4-4L5 15z"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+  </svg>
   <a class="skip-link" href="#main">跳到内容</a>
-  <div class="shell">
-    <header class="masthead">
-      <a class="brand" href="/observability" aria-label="Ferry 可观测首页"><span class="brand-name">FERRY<span class="brand-mark" aria-hidden="true"> / </span></span><span>个人可观测仪表盘</span></a>
-      <div class="freshness" role="status" aria-live="polite">
-        <span id="freshness-state" class="state-label">尚未读取数据</span>
-        <span id="freshness-time" class="caption">登录后查看采集时间</span>
+
+  <section id="login-view" class="login" aria-labelledby="login-title">
+    <div class="login-panel">
+      <div class="login-brand"><img src="/static/console-icon-192.png" alt="" width="48" height="48"><span>Ferry</span></div>
+      <h1 id="login-title">Ferry 个人助手</h1>
+      <p class="muted">开始对话，查看用量与管理长期记忆</p>
+      <form id="login-form" class="login-form">
+        <label for="username">用户名</label>
+        <input id="username" name="username" type="text" maxlength="64" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" maxlength="256" autocomplete="current-password" required aria-describedby="login-error">
+        <p id="login-error" class="error-message" role="alert"></p>
+        <button id="login-button" class="primary" type="submit">登录</button>
+      </form>
+      <p class="caption">登录状态保存在安全会话 Cookie 中，30 天内免登录；密码与 Token 不写入浏览器存储</p>
+    </div>
+  </section>
+
+  <div id="dashboard" class="workspace" hidden>
+    <aside class="sidebar" aria-label="主导航">
+      <a class="brand" href="/observability/"><img src="/static/console-icon-192.png" alt="" width="28" height="28"><span class="brand-name">Ferry</span><span class="brand-tag">控制台</span></a>
+      <nav class="nav">
+        <button type="button" class="nav-item" data-nav="chat" hidden><svg class="icon"><use href="#i-chat"/></svg>对话</button>
+        <p class="nav-group">监控</p>
+        <button type="button" class="nav-item" data-nav="overview"><svg class="icon"><use href="#i-overview"/></svg>概览</button>
+        <button type="button" class="nav-item" data-nav="performance"><svg class="icon"><use href="#i-performance"/></svg>性能</button>
+        <button type="button" class="nav-item" data-nav="usage"><svg class="icon"><use href="#i-usage"/></svg>Token 用量</button>
+        <button type="button" class="nav-item" data-nav="reliability"><svg class="icon"><use href="#i-reliability"/></svg>可靠性</button>
+        <button type="button" class="nav-item" data-nav="runtime"><svg class="icon"><use href="#i-runtime"/></svg>运行状态</button>
+        <p class="nav-group">控制</p>
+        <button type="button" class="nav-item" data-nav="memory"><svg class="icon"><use href="#i-memory"/></svg>记忆整理</button>
+        <button type="button" class="nav-item" data-nav="tasks"><svg class="icon"><use href="#i-tasks"/></svg>定时任务</button>
+        <button type="button" class="nav-item" data-nav="settings"><svg class="icon"><use href="#i-settings"/></svg>系统设置</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="freshness" role="status" aria-live="polite"><span id="freshness-state" class="state-label">尚未读取数据</span><span id="freshness-time" class="caption">登录后查看采集时间</span></div>
+        <div class="account"><span class="avatar" aria-hidden="true">Y</span><span id="account-name" class="account-name">—</span><button id="logout" class="quiet" type="button">退出</button></div>
       </div>
-    </header>
+    </aside>
 
-    <main id="main">
-      <section id="login-view" class="login-layout" aria-labelledby="login-title">
-        <div class="login-context">
-          <p class="eyebrow">Ferry 的收发记录，不是聊天记录</p>
-          <h1 id="login-title">每一次往返，<br>都有迹可循</h1>
-          <p>看轮次、耗时与已知用量。<br>这里不展示消息正文，也不把未知当作正常</p>
-          <div class="login-scope"><span>飞书</span><span>微信</span><span>系统任务</span></div>
-        </div>
-        <form id="login-form" class="login-card">
-          <h2>登录你的仪表盘</h2>
-          <p class="muted">单用户访问 · 密码仅用于本次验证</p>
-          <label for="password">密码</label>
-          <input id="password" name="password" type="password" maxlength="256" autocomplete="current-password" required aria-describedby="login-error">
-          <p id="login-error" class="error-message" role="alert"></p>
-          <button id="login-button" class="primary" type="submit">登录</button>
-          <p class="caption">登录状态仅保存在安全会话 Cookie 中<br>密码与 API Token 不写入浏览器存储</p>
-        </form>
-      </section>
+    <div class="content">
+      <header class="topbar">
+        <div class="topbar-title"><p id="view-eyebrow" class="eyebrow">监控</p><h1 id="view-title">概览</h1></div>
+        <div class="topbar-actions"><span id="console-sync" class="caption" role="status" aria-live="polite"></span><button id="view-refresh" class="icon-button" type="button" aria-label="刷新当前页面"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
+      </header>
 
-      <div id="dashboard" hidden>
-        <div class="page-heading"><div><p class="eyebrow">消息往返 · 观测台</p><h1>运行全貌</h1></div><button id="logout" class="quiet" type="button">退出登录</button></div>
-        <form id="filters" class="toolbar" aria-label="数据筛选">
-          <div class="filter-field"><label for="window">时间窗口</label><select id="window" name="window"><option value="1h">最近 1 小时</option><option value="24h" selected>最近 24 小时</option><option value="7d">最近 7 天</option><option value="30d">最近 30 天</option></select></div>
-          <div class="filter-field"><label for="channel">渠道</label><select id="channel" name="channel"><option value="all">全部渠道</option><option value="feishu">飞书</option><option value="wechat">微信</option><option value="system">系统</option></select></div>
-          <div class="filter-field model-filter"><label for="model">模型</label><input id="model" name="model" list="model-options" maxlength="96" placeholder="全部模型（all）" autocomplete="off"><datalist id="model-options"></datalist></div>
-          <div class="refresh-controls"><label class="check-label"><input id="auto-refresh" type="checkbox" checked>每 15 秒刷新</label><button id="refresh" type="submit">刷新数据</button></div>
-        </form>
-        <p id="request-status" class="request-status" role="status" aria-live="polite"></p>
-        <div id="empty-notice" class="notice" hidden></div>
-
-        <section class="transit" aria-labelledby="transit-title">
-          <div class="section-heading"><h2 id="transit-title">消息观测轨道</h2><p>窗口内事件，不是转化漏斗</p></div>
-          <ol class="transit-track">
-            <li><div class="track-title"><span class="track-dot" aria-hidden="true"></span><h3>入站</h3><span class="track-arrow" aria-hidden="true">→</span></div><p id="track-inbound" class="track-value">—</p><p id="track-inbound-note" class="caption">未观测</p></li>
-            <li><div class="track-title"><span class="track-dot" aria-hidden="true"></span><h3>排队</h3><span class="track-arrow" aria-hidden="true">→</span></div><p id="track-queue" class="track-value">—</p><p id="track-queue-note" class="caption">未观测</p></li>
-            <li><div class="track-title"><span class="track-dot" aria-hidden="true"></span><h3>执行</h3><span class="track-arrow" aria-hidden="true">→</span></div><p id="track-execution" class="track-value">—</p><p id="track-execution-note" class="caption">未观测</p></li>
-            <li><div class="track-title"><span class="track-dot" aria-hidden="true"></span><h3>回发</h3></div><p id="track-delivery" class="track-value">—</p><p id="track-delivery-note" class="caption">未观测</p></li>
-          </ol>
-        </section>
-
-        <div class="tabs" role="tablist" aria-label="观测维度">
-          <button id="tab-overview" role="tab" aria-controls="panel-overview" aria-selected="true" tabindex="0" data-tab="overview">总览</button>
-          <button id="tab-performance" role="tab" aria-controls="panel-performance" aria-selected="false" tabindex="-1" data-tab="performance">性能</button>
-          <button id="tab-usage" role="tab" aria-controls="panel-usage" aria-selected="false" tabindex="-1" data-tab="usage">Token 用量</button>
-          <button id="tab-reliability" role="tab" aria-controls="panel-reliability" aria-selected="false" tabindex="-1" data-tab="reliability">可靠性</button>
-          <button id="tab-runtime" role="tab" aria-controls="panel-runtime" aria-selected="false" tabindex="-1" data-tab="runtime">运行状态</button>
-        </div>
-
-        <section id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
-          <div id="overview-cards" class="metric-grid"></div>
-          <section class="surface trend-panel"><div class="section-heading"><h2>轮次与错误趋势</h2><p><span class="legend turns">轮次</span><span class="legend errors">错误</span></p></div><div id="turns-trend" class="trend"></div></section>
-          <div class="split"><section class="surface"><div class="section-heading"><h2>渠道分布</h2><p>结束轮次</p></div><div id="channel-breakdown"></div></section><section class="surface"><div class="section-heading"><h2>状态分布</h2><p>结束轮次</p></div><div id="status-breakdown"></div></section></div>
-          <section class="surface"><div class="section-heading"><h2>最近轮次</h2><p>仅轮次元数据，不展示正文</p></div><div id="runs-table"></div><div class="pagination"><button id="runs-prev" type="button">上一页</button><span id="runs-page" class="caption"></span><button id="runs-next" type="button">下一页</button></div></section>
-        </section>
-
-        <section id="panel-performance" role="tabpanel" aria-labelledby="tab-performance" tabindex="0" hidden>
-          <section class="surface"><div class="section-heading"><h2>阶段耗时</h2><p>单位：秒 · 仅有效样本</p></div><div id="performance-table"></div><p class="caption">分位数来自各阶段自己的样本，不能相加。没有样本时显示 —，不视为零延迟</p></section>
-          <section class="surface"><div class="section-heading"><h2>工具调用</h2><p>不含工具输入或输出</p></div><div id="tool-breakdown"></div></section>
-        </section>
-
-        <section id="panel-usage" role="tabpanel" aria-labelledby="tab-usage" tabindex="0" hidden>
-          <div class="usage-heading">
-            <div><p class="eyebrow">PI / 原生用量档案</p><h2>每一天的 Token 足迹</h2><p class="caption">全部 pi 原生记录 · 含历史 / 不与 Ferry 实时埋点叠加</p></div>
-            <div class="usage-actions"><label class="check-label"><input id="usage-auto-refresh" type="checkbox" checked>每 15 秒读取缓存</label><button id="usage-refresh" type="button">刷新并同步</button></div>
-          </div>
-          <form id="usage-filters" class="usage-filters" novalidate aria-label="pi 用量独立日期筛选">
-            <div class="usage-presets" role="group" aria-label="用量日期范围">
-              <button type="button" data-usage-range="7d" aria-pressed="false">7 天</button><button type="button" data-usage-range="14d" aria-pressed="false">14 天</button><button type="button" data-usage-range="30d" aria-pressed="true">30 天</button><button type="button" data-usage-range="90d" aria-pressed="false">90 天</button><button type="button" data-usage-range="all" aria-pressed="false">全部历史</button><button type="button" data-usage-range="custom" aria-pressed="false">自定义</button>
+      <main id="main">
+        <section id="view-chat" class="view chat-layout" aria-label="个人助手对话" hidden>
+          <aside class="chat-threads" aria-label="对话列表">
+            <div class="chat-list-head"><button id="chat-new" type="button" class="primary" aria-busy="false">新对话</button></div>
+            <div id="chat-thread-list" class="chat-thread-list"></div>
+          </aside>
+          <div id="chat-room" class="chat-room">
+            <header class="chat-head">
+              <button id="chat-open-drawer" type="button" class="icon-button" aria-label="打开对话列表" title="打开对话列表" aria-haspopup="dialog" aria-controls="chat-drawer"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+              <h2 id="chat-title">个人助手</h2>
+              <button id="chat-new-header" type="button" class="icon-button" aria-label="新对话" aria-busy="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+            </header>
+            <p id="chat-notice" class="chat-notice caption" role="status" aria-live="polite"></p>
+            <div id="chat-scroll" class="chat-scroll" role="region" aria-label="对话消息" tabindex="0">
+              <button id="chat-older" type="button" hidden>加载更早消息</button>
+              <div id="chat-messages"></div>
+              <div id="chat-empty" class="chat-welcome"><p class="eyebrow"><span data-app-name>Ferry</span> / 个人助手</p><h2>今天想聊些什么？</h2><p class="muted">发送文字、图片或文件。输入 / 查看可用命令。</p></div>
             </div>
-            <div id="usage-custom" class="usage-custom" hidden><label for="usage-start">开始日期<input id="usage-start" type="date" required></label><label for="usage-end">结束日期<input id="usage-end" type="date" required></label><button type="submit">应用日期</button></div>
-            <p class="caption">UTC+8（上海）· 起止日期均包含 · 不受 Ferry 窗口、渠道或模型筛选影响</p>
-            <p id="usage-date-error" class="error-message" role="alert" hidden></p>
+            <button id="chat-bottom" type="button" class="chat-bottom" hidden>回到最新消息 ↓</button>
+            <div id="chat-progress" class="chat-progress caption" role="status" aria-live="polite"></div>
+            <form id="chat-composer" class="chat-composer" aria-label="发送消息">
+              <div id="chat-attachments" class="chat-attachment-chips" aria-label="待发送附件"></div>
+              <div class="chat-input-wrap">
+                <span id="chat-input-label" class="sr-only">消息（最多 32000 字符）</span>
+                <div id="chat-input" contenteditable="plaintext-only" tabindex="0" data-empty="true" enterkeyhint="enter" role="combobox" aria-labelledby="chat-input-label" aria-placeholder="输入消息，/ 查看命令" aria-multiline="true" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="chat-commands" aria-expanded="false" aria-disabled="false" aria-describedby="chat-input-help"></div>
+                <div id="chat-commands" class="chat-commands" role="listbox" aria-label="可用命令" hidden></div>
+              </div>
+              <div class="chat-composer-actions">
+                <input id="chat-files" type="file" multiple hidden>
+                <button id="chat-add-files" type="button" aria-label="添加图片或文件">+</button>
+                <span id="chat-input-help" class="caption">Enter 发送 · Shift+Enter 换行</span>
+                <button id="chat-stop" type="button" class="danger-outline" hidden>停止</button>
+                <button id="chat-send" type="submit" class="primary" disabled>发送</button>
+              </div>
+            </form>
+          </div>
+        </section>
+        <section id="view-monitor" class="view" aria-labelledby="view-title">
+          <div class="page-heading sr-only"><h1>运行全貌</h1></div>
+          <form id="filters" class="toolbar" aria-label="数据筛选">
+            <div class="filter-field"><label for="window">时间窗口</label><select id="window" name="window"><option value="1h">最近 1 小时</option><option value="24h" selected>最近 24 小时</option><option value="7d">最近 7 天</option><option value="30d">最近 30 天</option></select></div>
+            <div class="filter-field"><label for="channel">渠道</label><select id="channel" name="channel"><option value="all">全部渠道</option><option value="feishu">飞书</option><option value="wechat">微信</option><option value="web">PWA</option><option value="system">系统</option></select></div>
+            <div class="filter-field model-filter"><label for="model">模型</label><input id="model" name="model" list="model-options" maxlength="96" placeholder="全部模型（all）" autocomplete="off"><datalist id="model-options"></datalist></div>
+            <div class="refresh-controls"><label class="check-label"><input id="auto-refresh" type="checkbox" checked>每 15 秒刷新</label><button id="refresh" type="submit">刷新数据</button></div>
           </form>
-          <div class="usage-sync"><span id="usage-sync-state" class="state-label">尚未读取 pi 用量</span><p id="usage-status" class="caption" role="status" aria-live="polite"></p><p id="usage-scan-meta" class="caption"></p></div>
-          <div id="usage-quality" class="notice" hidden><p id="usage-quality-summary"></p><ul id="usage-warnings" class="warning-list"></ul></div>
-          <p id="usage-shown-range" class="caption"></p>
-          <div id="usage-cards" class="metric-grid usage-metrics"></div>
-          <div id="usage-components" class="usage-components" aria-label="Token 四分项"></div>
-          <section class="surface usage-calendar" aria-labelledby="usage-calendar-title">
-            <div class="section-heading"><div><p class="eyebrow">日历 / 全历史视角</p><h2 id="usage-calendar-title">年度活动热力图</h2></div><div class="usage-heat-controls" role="group" aria-label="热力图独立时间跨度"><button type="button" data-heat-span="180" aria-pressed="true">180 天</button><button type="button" data-heat-span="365" aria-pressed="false">365 天</button></div></div>
-            <p id="usage-calendar-summary" class="caption">独立于上方日期筛选，默认展示最近 180 天</p>
-            <div id="usage-heat-scroll" class="usage-heat-scroll" role="region" aria-label="每日用量日历，可横向滚动；方向键选择日期" tabindex="0"><div id="usage-heatmap"></div></div>
-            <div class="usage-heat-footer"><p id="usage-heat-tooltip" class="caption" role="status">悬停、点击或用方向键查看每日用量</p><div class="usage-heat-legend" aria-label="颜色由少到多，斜线为未采集"><span><i class="usage-heat-cell" data-level="missing"></i>未采集</span><span><i class="usage-heat-cell" data-level="0"></i>0</span><span>少</span><i class="usage-heat-cell" data-level="1"></i><i class="usage-heat-cell" data-level="2"></i><i class="usage-heat-cell" data-level="3"></i><i class="usage-heat-cell" data-level="4"></i><i class="usage-heat-cell" data-level="5"></i><span>多</span></div></div>
-            <details class="usage-details"><summary>查看热力图日期明细</summary><div id="usage-calendar-table"></div></details>
+          <p id="request-status" class="request-status" role="status" aria-live="polite"></p>
+          <div id="empty-notice" class="notice" hidden></div>
+
+          <section class="transit" aria-labelledby="transit-title">
+            <div class="section-heading"><h2 id="transit-title">消息观测轨道</h2><p>窗口内事件，不是转化漏斗</p></div>
+            <ol class="transit-track">
+              <li><div class="track-title"><span class="track-dot" aria-hidden="true"></span><h3>入站</h3><span class="track-arrow" aria-hidden="true">→</span></div><p id="track-inbound" class="track-value">—</p><p id="track-inbound-note" class="caption">未观测</p></li>
+              <li><div class="track-title"><span class="track-dot" aria-hidden="true"></span><h3>排队</h3><span class="track-arrow" aria-hidden="true">→</span></div><p id="track-queue" class="track-value">—</p><p id="track-queue-note" class="caption">未观测</p></li>
+              <li><div class="track-title"><span class="track-dot" aria-hidden="true"></span><h3>执行</h3><span class="track-arrow" aria-hidden="true">→</span></div><p id="track-execution" class="track-value">—</p><p id="track-execution-note" class="caption">未观测</p></li>
+              <li><div class="track-title"><span class="track-dot" aria-hidden="true"></span><h3>回发</h3></div><p id="track-delivery" class="track-value">—</p><p id="track-delivery-note" class="caption">未观测</p></li>
+            </ol>
           </section>
-          <section class="surface" aria-labelledby="usage-trend-title"><div class="section-heading"><h2 id="usage-trend-title">每日模型用量</h2><p>Top 5 + 其他 · 左轴 Token / 右轴缓存读取率</p></div><div id="usage-trend" class="usage-chart-scroll" role="region" tabindex="0" aria-label="每日堆叠趋势，可横向滚动"></div><div id="usage-trend-legend" class="usage-legend"></div><p class="caption">缓存率无分母时断线，不沿用前一天；缺少日记录不补零</p><details class="usage-details"><summary>查看每日趋势数据</summary><div id="usage-daily-table"></div></details></section>
-          <section class="surface" aria-labelledby="usage-model-title"><div class="section-heading"><h2 id="usage-model-title">模型用量分布</h2><p>按 Token 排名 · Top 5 + 其他</p></div><div class="usage-model-layout"><div id="usage-donut"></div><ol id="usage-model-ranking" class="usage-model-ranking"></ol></div></section>
-          <section class="surface"><div class="section-heading"><h2>模型明细</h2><p>全部模型 · 按 Token 降序</p></div><div id="usage-model-table"></div></section>
-          <details class="usage-details usage-definitions"><summary>统计口径与缺失值</summary><ul class="warning-list"><li>总 Token = 输入 + 缓存读取 + 缓存写入 + 输出；推理 Token 已包含在输出中，不重复相加</li><li>轮次使用所选日期范围内去重结果，不能将每日或模型轮次相加</li><li>请求指助手、压缩与分支摘要的 usage 记录，不是底层 HTTP 请求</li><li>缓存读取率 = 缓存读取 /（输入 + 缓存读取），不含缓存写入；无分母显示 —</li><li>compaction（压缩）和 branch_summary（分支摘要）用量计入总量；没有模型标记时显示「未标记/压缩」，不猜测所属模型</li><li>只展示已采集记录，缺失用量不估算；未采集与已记录的 0 分开呈现，不提供费用</li></ul></details>
+
+          <div class="tabs" role="tablist" aria-label="观测维度">
+            <button id="tab-overview" role="tab" aria-controls="panel-overview" aria-selected="true" tabindex="0" data-tab="overview">总览</button>
+            <button id="tab-performance" role="tab" aria-controls="panel-performance" aria-selected="false" tabindex="-1" data-tab="performance">性能</button>
+            <button id="tab-usage" role="tab" aria-controls="panel-usage" aria-selected="false" tabindex="-1" data-tab="usage">Token 用量</button>
+            <button id="tab-reliability" role="tab" aria-controls="panel-reliability" aria-selected="false" tabindex="-1" data-tab="reliability">可靠性</button>
+            <button id="tab-runtime" role="tab" aria-controls="panel-runtime" aria-selected="false" tabindex="-1" data-tab="runtime">运行状态</button>
+          </div>
+
+          <section id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
+            <div id="overview-cards" class="metric-grid"></div>
+            <section class="surface trend-panel"><div class="section-heading"><h2>轮次与错误趋势</h2><p><span class="legend turns">轮次</span><span class="legend errors">错误</span></p></div><div id="turns-trend" class="trend"></div></section>
+            <div class="split"><section class="surface"><div class="section-heading"><h2>渠道分布</h2><p>结束轮次</p></div><div id="channel-breakdown"></div></section><section class="surface"><div class="section-heading"><h2>状态分布</h2><p>结束轮次</p></div><div id="status-breakdown"></div></section></div>
+            <section class="surface"><div class="section-heading"><h2>最近轮次</h2><p>仅轮次元数据，不展示正文</p></div><div id="runs-table"></div><div class="pagination"><button id="runs-prev" type="button">上一页</button><span id="runs-page" class="caption"></span><button id="runs-next" type="button">下一页</button></div></section>
+          </section>
+
+          <section id="panel-performance" role="tabpanel" aria-labelledby="tab-performance" tabindex="0" hidden>
+            <section class="surface"><div class="section-heading"><h2>阶段耗时</h2><p>单位：秒 · 仅有效样本</p></div><div id="performance-table"></div><p class="caption">分位数来自各阶段自己的样本，不能相加。没有样本时显示 —，不视为零延迟</p></section>
+            <section class="surface"><div class="section-heading"><h2>工具调用</h2><p>不含工具输入或输出</p></div><div id="tool-breakdown"></div></section>
+          </section>
+
+          <section id="panel-usage" role="tabpanel" aria-labelledby="tab-usage" tabindex="0" hidden>
+            <div class="usage-heading">
+              <div><p class="eyebrow">PI / 原生用量档案</p><h2>每一天的 Token 足迹</h2><p class="caption">全部 pi 原生记录 · 含历史 / 不与 Ferry 实时埋点叠加</p></div>
+              <div class="usage-actions"><label class="check-label"><input id="usage-auto-refresh" type="checkbox" checked>每 15 秒读取缓存</label><button id="usage-refresh" type="button">刷新并同步</button></div>
+            </div>
+            <form id="usage-filters" class="usage-filters" novalidate aria-label="pi 用量独立日期筛选">
+              <div class="usage-presets" role="group" aria-label="用量日期范围">
+                <button type="button" data-usage-range="7d" aria-pressed="false">7 天</button><button type="button" data-usage-range="14d" aria-pressed="false">14 天</button><button type="button" data-usage-range="30d" aria-pressed="true">30 天</button><button type="button" data-usage-range="90d" aria-pressed="false">90 天</button><button type="button" data-usage-range="all" aria-pressed="false">全部历史</button><button type="button" data-usage-range="custom" aria-pressed="false">自定义</button>
+              </div>
+              <div id="usage-custom" class="usage-custom" hidden><label for="usage-start">开始日期<input id="usage-start" type="date" required></label><label for="usage-end">结束日期<input id="usage-end" type="date" required></label><button type="submit">应用日期</button></div>
+              <p class="caption">UTC+8（上海）· 起止日期均包含 · 不受 Ferry 窗口、渠道或模型筛选影响</p>
+              <p id="usage-date-error" class="error-message" role="alert" hidden></p>
+            </form>
+            <div class="usage-sync"><span id="usage-sync-state" class="state-label">尚未读取 pi 用量</span><p id="usage-status" class="caption" role="status" aria-live="polite"></p><p id="usage-scan-meta" class="caption"></p></div>
+            <div id="usage-quality" class="notice" hidden><p id="usage-quality-summary"></p><ul id="usage-warnings" class="warning-list"></ul></div>
+            <p id="usage-shown-range" class="caption"></p>
+            <div id="usage-cards" class="metric-grid usage-metrics"></div>
+            <div id="usage-components" class="usage-components" aria-label="Token 四分项"></div>
+            <section class="surface usage-calendar" aria-labelledby="usage-calendar-title">
+              <div class="section-heading"><div><p class="eyebrow">日历 / 全历史视角</p><h2 id="usage-calendar-title">年度活动热力图</h2></div><div class="usage-heat-controls" role="group" aria-label="热力图独立时间跨度"><button type="button" data-heat-span="180" aria-pressed="true">180 天</button><button type="button" data-heat-span="365" aria-pressed="false">365 天</button></div></div>
+              <p id="usage-calendar-summary" class="caption">独立于上方日期筛选，默认展示最近 180 天</p>
+              <div id="usage-heat-scroll" class="usage-heat-scroll" role="region" aria-label="每日用量日历，可横向滚动；方向键选择日期" tabindex="0"><div id="usage-heatmap"></div></div>
+              <div class="usage-heat-footer"><p id="usage-heat-tooltip" class="caption" role="status">悬停、点击或用方向键查看每日用量</p><div class="usage-heat-legend" aria-label="颜色由少到多，斜线为未采集"><span><i class="usage-heat-cell" data-level="missing"></i>未采集</span><span><i class="usage-heat-cell" data-level="0"></i>0</span><span>少</span><i class="usage-heat-cell" data-level="1"></i><i class="usage-heat-cell" data-level="2"></i><i class="usage-heat-cell" data-level="3"></i><i class="usage-heat-cell" data-level="4"></i><i class="usage-heat-cell" data-level="5"></i><span>多</span></div></div>
+              <details class="usage-details"><summary>查看热力图日期明细</summary><div id="usage-calendar-table"></div></details>
+            </section>
+            <section class="surface" aria-labelledby="usage-trend-title"><div class="section-heading"><h2 id="usage-trend-title">每日模型用量</h2><p>Top 5 + 其他 · 左轴 Token / 右轴缓存读取率</p></div><div id="usage-trend" class="usage-chart-scroll" role="region" tabindex="0" aria-label="每日堆叠趋势，可横向滚动"></div><div id="usage-trend-legend" class="usage-legend"></div><p class="caption">缓存率无分母时断线，不沿用前一天；缺少日记录不补零</p><details class="usage-details"><summary>查看每日趋势数据</summary><div id="usage-daily-table"></div></details></section>
+            <section class="surface" aria-labelledby="usage-model-title"><div class="section-heading"><h2 id="usage-model-title">模型用量分布</h2><p>按 Token 排名 · Top 5 + 其他</p></div><div class="usage-model-layout"><div id="usage-donut"></div><ol id="usage-model-ranking" class="usage-model-ranking"></ol></div></section>
+            <section class="surface"><div class="section-heading"><h2>模型明细</h2><p>全部模型 · 按 Token 降序</p></div><div id="usage-model-table"></div></section>
+            <details class="usage-details usage-definitions"><summary>统计口径与缺失值</summary><ul class="warning-list"><li>总 Token = 输入 + 缓存读取 + 缓存写入 + 输出；推理 Token 已包含在输出中，不重复相加</li><li>轮次使用所选日期范围内去重结果，不能将每日或模型轮次相加</li><li>请求指助手、压缩与分支摘要的 usage 记录，不是底层 HTTP 请求</li><li>缓存读取率 = 缓存读取 /（输入 + 缓存读取），不含缓存写入；无分母显示 —</li><li>compaction（压缩）和 branch_summary（分支摘要）用量计入总量；没有模型标记时显示「未标记/压缩」，不猜测所属模型</li><li>只展示已采集记录，缺失用量不估算；未采集与已记录的 0 分开呈现，不提供费用</li></ul></details>
+          </section>
+
+          <section id="panel-reliability" role="tabpanel" aria-labelledby="tab-reliability" tabindex="0" hidden>
+            <div id="reliability-cards" class="metric-grid"></div>
+            <section class="surface"><div class="section-heading"><h2>采集质量</h2><p>数据完整性，不等于服务健康</p></div><div id="quality-cards" class="metric-grid compact"></div><ul id="quality-warnings" class="warning-list"></ul></section>
+          </section>
+
+          <section id="panel-runtime" role="tabpanel" aria-labelledby="tab-runtime" tabindex="0" hidden>
+            <section class="surface"><div class="section-heading"><h2>主服务最近快照</h2><p>不随窗口与渠道筛选</p></div><p id="runtime-notice" class="notice"></p><dl id="runtime-meta" class="runtime-meta"></dl><div id="runtime-table"></div></section>
+          </section>
         </section>
 
-        <section id="panel-reliability" role="tabpanel" aria-labelledby="tab-reliability" tabindex="0" hidden>
-          <div id="reliability-cards" class="metric-grid"></div>
-          <section class="surface"><div class="section-heading"><h2>采集质量</h2><p>数据完整性，不等于服务健康</p></div><div id="quality-cards" class="metric-grid compact"></div><ul id="quality-warnings" class="warning-list"></ul></section>
-        </section>
-
-        <section id="panel-runtime" role="tabpanel" aria-labelledby="tab-runtime" tabindex="0" hidden>
-          <section class="surface"><div class="section-heading"><h2>主服务最近快照</h2><p>不随窗口与渠道筛选</p></div><p id="runtime-notice" class="notice"></p><dl id="runtime-meta" class="runtime-meta"></dl><div id="runtime-table"></div></section>
-        </section>
-
-        <details class="api-guide">
-          <summary>API 读取指引 · 供 LLM 或本地脚本使用</summary>
-          <div class="guide-content"><p>使用独立的只读 Token。不要分享登录密码、Cookie 或内部上报 Token；此页面不会显示或保存凭证</p><p><a href="/api/observability/v1/schema" target="_blank" rel="noopener">查看指标定义 / schema</a><span class="separator">·</span><a href="/metrics" target="_blank" rel="noopener">Prometheus 指标</a></p><p class="caption">本机读取模板：先在终端设置 OBSERVABILITY_READ_TOKEN。远程访问请改用已配置的 HTTPS 地址</p><pre><code>curl --fail --silent --show-error \
+        <section id="view-memory" class="view" hidden><div id="memory-root" class="stack"></div></section>
+        <section id="view-tasks" class="view" hidden><div id="tasks-root" class="stack"></div></section>
+        <section id="view-settings" class="view" hidden>
+          <section id="appearance-panel" class="card appearance-panel" aria-labelledby="appearance-title">
+            <div class="card-head"><div><h2 id="appearance-title">助手外观与触感</h2><p class="caption">只改变界面和安装图标，不改变登录用户名、pi 或助手规则。</p></div><button id="appearance-refresh" type="button" class="link-button" data-haptic>重新读取</button></div>
+            <p id="appearance-current" class="caption"></p>
+            <form id="appearance-form" novalidate aria-describedby="appearance-status appearance-privacy" aria-busy="false">
+              <fieldset id="appearance-fields" disabled>
+                <legend class="sr-only">助手外观</legend>
+                <label class="field" for="appearance-name"><span class="field-label">助手名称（1–32 个字符）</span><input id="appearance-name" name="name" type="text" maxlength="64" autocomplete="off" value="Ferry" required aria-describedby="appearance-status"></label>
+                <div class="appearance-avatar-row">
+                  <img id="appearance-preview" src="/static/console-icon-192.png" alt="助手头像预览" width="56" height="56">
+                  <div class="appearance-avatar-controls"><label class="field" for="appearance-file"><span class="field-label">头像 · 本地缩小后上传，最多 2 MiB</span><input id="appearance-file" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif" aria-describedby="appearance-file-note"></label><p id="appearance-file-note" class="caption"></p><div class="actions"><button id="appearance-remove-avatar" type="button" class="link-button" data-haptic>移除头像</button><button id="appearance-undo-avatar" type="button" class="link-button" data-haptic hidden>撤销头像修改</button></div></div>
+                </div>
+                <label class="appearance-haptics"><input id="appearance-haptics" type="checkbox" switch name="haptics_enabled" checked><span>轻点操作时尝试触感反馈</span></label>
+                <p class="caption">默认开启，仅在登录后主动轻点操作时尝试；不会在输入、键盘发送或后台回复时触发。iOS 不提供通用振动 API，按钮不能保证触感；可见开关的原生反馈由系统决定。</p>
+                <div class="appearance-test"><button id="appearance-test" type="button">手动试一下</button><span id="appearance-test-status" class="caption" role="status" aria-live="polite"></span></div>
+                <p id="appearance-privacy" class="caption">名称与头像由你选择公开：未登录页面和 PWA 安装资源也可读取。请勿上传私密照片。iPhone 已安装图标或名称可能需要移除后重新添加到主屏幕；网页无法移除 iOS 原生键盘附件栏。</p>
+                <div class="actions"><button id="appearance-save" type="submit" class="primary" data-haptic>保存外观</button><button id="appearance-reset" type="button" class="quiet" data-haptic>恢复默认</button></div>
+              </fieldset>
+              <div id="appearance-reset-confirm" class="appearance-reset-confirm" role="group" aria-labelledby="appearance-reset-title" hidden><p id="appearance-reset-title">恢复 Ferry 默认名称、图标和开启触感？未保存的外观草稿也会清除。</p><div class="actions"><button id="appearance-reset-cancel" type="button">取消</button><button id="appearance-reset-accept" type="button" class="danger-outline" data-haptic>确认恢复默认</button></div></div>
+              <p id="appearance-status" class="caption" role="status" aria-live="polite"></p>
+            </form>
+          </section>
+          <section id="notifications-panel" class="card" aria-labelledby="notifications-title">
+            <h2 id="notifications-title">通知</h2>
+            <p id="notification-status" class="caption" role="status" aria-live="polite">正在读取通知状态…</p>
+            <label class="check-label"><input id="notification-scheduled" type="checkbox" checked>接收定时通知</label>
+            <div class="actions"><button id="notification-enable" type="button">开启通知</button><button id="notification-disable" type="button">关闭通知</button><button id="notification-test" type="button">测试通知</button></div>
+          </section>
+          <div id="settings-root" class="stack"></div>
+          <details class="api-guide">
+            <summary>API 读取指引 · 供 LLM 或本地脚本使用</summary>
+            <div class="guide-content"><p>使用独立的只读 Token。不要分享登录密码、Cookie 或内部上报 Token；此页面不会显示或保存凭证</p><p><a href="/api/observability/v1/schema" target="_blank" rel="noopener">查看指标定义 / schema</a><span class="separator">·</span><a href="/metrics" target="_blank" rel="noopener">Prometheus 指标</a></p><p class="caption">本机读取模板：先在终端设置 OBSERVABILITY_READ_TOKEN。远程访问请改用已配置的 HTTPS 地址</p><pre><code>curl --fail --silent --show-error \
   -H "Authorization: Bearer ${OBSERVABILITY_READ_TOKEN}" \
-  'http://127.0.0.1:38080/api/observability/v1/summary?window=24h&amp;channel=all&amp;model=all'</code></pre><p><a href="/api/observability/v1/usage?range=all" target="_blank" rel="noopener">读取全部 pi 历史 Token 用量</a></p><p class="caption">pi 历史使用 /api/observability/v1/usage?range=all，日期筛选支持 7d / 14d / 30d / 90d / custom；不要与运行事件 Token 相加</p><p class="caption">summary 返回完整视图；timeseries / breakdown / runs 返回对应数据及公共质量元数据。runs 支持 limit=1..100 与整数 cursor 偏移</p></div>
-        </details>
-        <footer><span>FERRY / 只观测，不干预</span><span>— 未观测或不可用<span class="separator">·</span>0 已观测计数为零</span></footer>
-      </div>
-    </main>
-    <noscript><p class="notice">此仪表盘需要 JavaScript。也可使用独立只读 Token 访问 /api/observability/v1/summary</p></noscript>
+  'http://127.0.0.1:38080/api/observability/v1/summary?window=24h&amp;channel=all&amp;model=all'</code></pre><p class="caption">pi 历史使用 /api/observability/v1/usage?range=all；只读 Token 不能调用控制台写操作</p></div>
+          </details>
+          <div class="mobile-account"><span id="account-name-mobile" class="caption">—</span><button id="logout-mobile" class="danger-quiet" type="button">退出登录</button></div>
+        </section>
+        <footer><span><span data-app-name>Ferry</span> · 观测与控制</span><span>— 未观测或不可用<span class="separator">·</span>0 已观测计数为零</span></footer>
+      </main>
+    </div>
+
+    <nav class="tabbar" aria-label="快捷导航">
+      <button type="button" data-nav="chat" hidden><svg class="icon"><use href="#i-chat"/></svg><span>对话</span></button>
+      <button type="button" data-nav="overview"><svg class="icon"><use href="#i-overview"/></svg><span>概览</span></button>
+      <button type="button" data-nav="usage"><svg class="icon"><use href="#i-usage"/></svg><span>用量</span></button>
+      <button type="button" data-nav="memory"><svg class="icon"><use href="#i-memory"/></svg><span>记忆</span></button>
+      <button type="button" data-nav="settings"><svg class="icon"><use href="#i-settings"/></svg><span>设置</span></button>
+    </nav>
   </div>
+
+  <dialog id="chat-drawer" class="chat-drawer" aria-label="我的对话">
+    <div class="chat-list-head"><button id="chat-close-drawer" type="button">关闭</button></div>
+    <button id="chat-new-mobile" type="button" class="primary" aria-busy="false">新对话</button>
+    <p id="chat-drawer-notice" class="chat-notice caption" role="status" aria-live="polite"></p>
+    <div id="chat-drawer-list" class="chat-thread-list"></div>
+  </dialog>
+  <dialog id="chat-dialog" class="chat-dialog" aria-labelledby="chat-dialog-title" aria-describedby="chat-dialog-message">
+    <form id="chat-dialog-form">
+      <h2 id="chat-dialog-title"></h2>
+      <p id="chat-dialog-message" class="muted"></p>
+      <label id="chat-name-label" for="chat-name">对话名称</label>
+      <input id="chat-name" type="text" maxlength="80" autocomplete="off">
+      <p id="chat-dialog-error" class="error-message" role="alert"></p>
+      <div class="sheet-actions"><button id="chat-dialog-cancel" type="button">取消</button><button id="chat-dialog-confirm" type="submit" class="primary">保存</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div id="sheet-backdrop" class="sheet-backdrop" hidden>
+    <div id="sheet" class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="sheet-title" aria-describedby="sheet-message">
+      <h2 id="sheet-title"></h2>
+      <p id="sheet-message" class="muted"></p>
+      <div class="sheet-actions"><button id="sheet-cancel" type="button">取消</button><button id="sheet-confirm" class="danger" type="button">确认</button></div>
+    </div>
+  </div>
+  <noscript><p class="notice">此控制台需要 JavaScript。也可使用独立只读 Token 访问 /api/observability/v1/summary</p></noscript>
 </body>
 </html>

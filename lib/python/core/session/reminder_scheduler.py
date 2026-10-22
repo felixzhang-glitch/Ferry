@@ -31,6 +31,7 @@ class Reminder:
     text: str
     due_at: float
     created_at: float = field(default_factory=time.time)
+    channel: str = "feishu"
 
 
 class ReminderScheduler:
@@ -41,8 +42,10 @@ class ReminderScheduler:
         *,
         max_delivery_attempts: int = MAX_DELIVERY_ATTEMPTS,
         retry_delay_seconds: float = RETRY_DELAY_SECONDS,
+        web_callback: ReminderCallback | None = None,
     ) -> None:
         self._callback = callback
+        self._web_callback = web_callback
         self._max_delivery_attempts = max(1, int(max_delivery_attempts))
         self._retry_delay_seconds = max(0.0, float(retry_delay_seconds))
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -57,13 +60,16 @@ class ReminderScheduler:
                 self._reminders[reminder.reminder_id] = reminder
                 self._tasks[reminder.reminder_id] = task
 
-    async def schedule(self, chat_id: str, text: str, delay_seconds: float) -> Reminder:
+    async def schedule(self, chat_id: str, text: str, delay_seconds: float, *, channel: str = "feishu") -> Reminder:
+        if channel not in {"feishu", "web"}:
+            raise ValueError("Unsupported reminder channel")
         delay = max(0.0, delay_seconds)
         reminder = Reminder(
             reminder_id=uuid.uuid4().hex,
             chat_id=chat_id,
             text=text,
             due_at=time.time() + delay,
+            channel=channel,
         )
 
         async with self._lock:
@@ -73,6 +79,9 @@ class ReminderScheduler:
             await self._save_reminders_unlocked()
 
         return reminder
+
+    def list_reminders(self) -> list[Reminder]:
+        return sorted(self._reminders.values(), key=lambda reminder: reminder.due_at)
 
     async def cancel(self, reminder_id: str) -> bool:
         async with self._lock:
@@ -105,7 +114,10 @@ class ReminderScheduler:
                 delivery_started = time.monotonic()
                 delivery_status = "error"
                 try:
-                    await self._callback(reminder.chat_id, reminder.text, trace_id)
+                    callback = self._web_callback if reminder.channel == "web" else self._callback
+                    if callback is None:
+                        raise RuntimeError("Reminder delivery unavailable")
+                    await callback(reminder.chat_id, reminder.text, trace_id)
                     delivery_status = "success"
                 except asyncio.CancelledError:
                     delivery_status = "cancelled"
@@ -121,7 +133,7 @@ class ReminderScheduler:
                         },
                     )
                 finally:
-                    emit("task", channel="feishu", source="scheduled", operation="reminder",
+                    emit("task", channel=reminder.channel, source="scheduled", operation="reminder",
                          stage="task_delivery", status=delivery_status, count=1,
                          duration_seconds=time.monotonic() - delivery_started)
 
@@ -180,6 +192,7 @@ class ReminderScheduler:
                 "text": reminder.text,
                 "due_at": reminder.due_at,
                 "created_at": reminder.created_at,
+                "channel": reminder.channel,
             }
             for reminder in self._reminders.values()
         ]
@@ -205,7 +218,8 @@ class ReminderScheduler:
         reminder_id = str(item.get("reminder_id", "")).strip()
         chat_id = str(item.get("chat_id", "")).strip()
         text = str(item.get("text", "")).strip()
-        if not reminder_id or not chat_id or not text:
+        channel = item.get("channel", "feishu")
+        if not reminder_id or not chat_id or not text or channel not in {"feishu", "web"}:
             return None
 
         try:
@@ -220,4 +234,5 @@ class ReminderScheduler:
             text=text,
             due_at=due_at,
             created_at=created_at,
+            channel=channel,
         )

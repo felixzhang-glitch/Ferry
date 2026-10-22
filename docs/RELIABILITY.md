@@ -6,6 +6,23 @@
 - pi transcript 与映射共同构成会话恢复条件，不能只保留 `pi-sessions.json`
 - `pending_files`、消息队列、运行中任务是内存态，不承诺重启恢复；归档文件本身保留
 
+## PWA 聊天运维
+
+- 本地聊天署名用私有配置 `OBSERVABILITY_USER_DISPLAY_NAME`，默认“我”；用户名默认 `admin`，已有 `OBSERVABILITY_USERNAME` 不变。改署名后只需重启独立控制台，不重启主服务或微信；配置不入 Git，保留已有会话
+- v0.13.0 起 `rules/system.md` 不再随源码发布；升级时先保留本机规则副本，Git 更新可能移除旧跟踪路径，需恢复到被忽略的同名位置。新克隆按需创建本地 system/admin 规则，缺失时提示并跳过，不自动生成个人规则
+
+- App 外观单独持久化在 `OBSERVABILITY_STORE_DIR/appearance/`，包括 0600 状态与归一化图标版本；变更原子提交，不存原始照片。与观测数据一起备份；坏状态不自动覆盖，读页面可回默认外壳，修改接口明确报错。新增 Pillow 用于安全解码图像，不依赖外部图片服务
+- 自定义名称/图标不改变 manifest 的 id/scope/start_url。既有 iPhone 桌面安装可能不自动更新图标/名称，需要用户重新添加；开关触感不能保证各 iOS 版本或系统设置下有震动
+- PWA 外壳升级不缓存 API／附件；更新后重新打开页面取得当前会话的控制台 CSRF。旧页面缺令牌时提示刷新，不自动重放写操作或强刷丢草稿。纯文本聊天输入旨在减少 iOS 表单辅助栏，是否隐藏及键盘间距必须使用目标 iPhone 和输入法验收，不能由 Chromium 模拟结果代替
+- `./bin/server obs credentials ensure` 补齐独立 `OBSERVABILITY_CHAT_TOKEN`，不改登录密码；主服务与观测进程重启后生效。聊天数据默认 `runtime/server/web-chat/`，改路径用 `WEB_CHAT_STORE_DIR`；与 Pi 原生 transcript/映射一起备份，聊天 UI 历史不是 Pi 上下文恢复的替代品
+- JSON 控制配置维持 4KB；聊天 turn 为 64KiB，附件每个 10MiB，Web turn 最长 600 秒；NDJSON 每 15 秒 heartbeat，代理 read timeout 700 秒。部署时需同步新版 nginx snippet，启用 chat 专用流式 location，并显式屏蔽 `/internal/chat/`
+- 刷新/切换线程/断网只解除订阅，原 turn 在服务端继续；重新打开通过 active + events 取完整快照/序号恢复，不自动重发提示词。Stop、注销、删除、超时和主服务退出仍取消；重启后的在途轮次标 interrupted，不承诺续算。没有离线发送队列
+- PWA、飞书、微信及 Web 每日任务共享 `PI_MODEL/PI_THINKING` 与控制台持久化覆盖；`WEB_PI_MODEL/WEB_PI_THINKING` 已移除，私有配置中残留值不再生效。设置修改与恢复默认从下一轮生效，当前轮及其自动重试保持进入时的参数；Dream 独立模型不变。最终显示与持久化使用成功轮次末条 assistant text，不拼接工具前正文；旧污染历史不自动删除
+- 通知需显式设 `WEB_PUSH_ENABLED=true`、`WEB_PUSH_CONTACT` 为有效 mailto 或 HTTPS 联系地址，重启主服务；观测进程须允许回环校验登录有效性。`WEB_PUSH_STORE_DIR` 默认 `runtime/server/web-push/`，VAPID 私钥与订阅/outbox 都须备份，不能只恢复订阅而换密钥。iPhone 需 HTTPS、主屏幕安装及用户主动授权
+- 通知是尽力投送：32 个订阅、512 个待发、24 小时有效期与最多 8 次尝试，429/5xx 退避、404/410 清理失效订阅；每线程待转交元数据最多 256 条，超量只保留最近通知，聊天正文不受影响。前台已读回复不提醒，短可见租约只延后投送，避免后台切换丢失时误吞通知；提醒/简报按订阅开关投送。系统专注模式可能阻止显示。通知点击回会话，锁屏不发正文
+- `/remind` 与 `/daily` 支持 PWA；结果独立保存在目标会话，不进入 Pi 原生历史，无推送授权也可查看。Web 每日任务落库失败保留已生成答案再投送，不重复生成；删除会话会停止关联任务，启动时清理已删除会话的残留调度
+- 存储损坏不静默覆盖，启动不可用时聊天 API 返回未启用；其他 IM 不受影响。异常日志只写 error 类型，不打印上传文件/聊天内容
+
 ## 监控与告警
 
 - 健康检查：`./bin/server status`；可观测独立进程 `./bin/server obs status`，Supervisor 名称 `ferry-observability`，主服务仍为 `ferry-stack:ferry`
@@ -42,6 +59,25 @@
 - 需要新上下文时用 `/new` 或 `/reset`，清附件与 pi session 映射，不删除旧 transcript
 - `/compact`、`/compress` 仅说明由 pi 原生管理，不执行桥接层压缩；旧后端命令不能用于故障切换
 - 重试、退避、熔断与流读取保护归 `PiCliClient`，配置统一 `PI_*`，不再依赖已删除的其它后端实现
+
+### Dream 记忆整理
+
+- 定时 `DREAM_TIME`（默认 02:00，`FERRY_TIMEZONE`）整理，`DREAM_REPORT_TIME`（默认 08:00）推送报告；两者都在到点后 6 小时内重启时补跑 / 补发，同日不重复。待发报告存在 `state.json` 的 `pending_report`，重启不丢
+- 控制台改时间、开关或推送目标即时生效（唤醒调度循环重新计算），无需重启；改动持久化在 `runtime/server/console-settings.json`，启动时在 `conf/.env` 之后加载并优先；删除该文件即回到 `.env`
+- 失败（pi 报错 / 超时 / 输出不是 JSON）不改记忆、不推进 watermark，失败通知随报告推送；修复后发 `/dream` 或在控制台点「立即整理」即可从同一 watermark 继续
+- 邮件发送失败（授权码缺失、SMTP 拒绝）只记日志，不影响其他推送目标；授权码文件为 `MAIL_ENV_FILE`
+- 整理期间某类别被对话修改：跳过该类别，watermark 不推进，下次运行重抽；已生效的其他类别仍单独提交
+- 误记：发 `/memory undo` 回滚最近一次 Dream 提交；之后记忆又被改过导致冲突时自动 `revert --abort`，按 `docs/memory.md` 的 `mgit` 别名手工 `mgit revert <dream 提交>` 或直接编辑文件
+- 审计：`runtime/server/dream/run-*.json` 保存每次的范围（`scope: all|chat`）、变更、evidence、被拒 op 与模型原始输出；`state.json` 保存全局 `watermark`、各对话 `chat_watermarks` 与最近一次结果。删除 `state.json` 等于从"过去 7 天"重新开始，靠去重收敛不会重复写入
+- 漏读排查：Dream 只认 `pi-sessions.json` 与 `pi-session-history.jsonl` 里的聊天会话；若有会话 transcript 不在两者中（台账上线前被 `/new` 掉的），先停主进程（`supervisorctl stop ferry-stack:ferry`，`DreamRunner` 状态在内存里），备份后往台账补 `{at, session_key, session_id}`、把 `state.json` 的 `watermark` 回退到需要重读的时间，再启动并「立即整理」
+- 隔离：Dream 走独立 CLI 子进程，不占 worker 池、不计入熔断，不会因为整理失败影响白天对话
+
+### 控制台
+
+- 控制台是观测进程（38080）的一部分；主服务不可达时监控页照常可用，控制页显示「主服务不可达」并在恢复后自动刷新
+- 登录会话持久化在 `runtime/observability/console-sessions.json`（只存哈希），观测进程重启不掉线；需要强制全部下线时删除该文件后 `./bin/server obs restart`
+- 控制台令牌缺失（老的 `conf/.env.observability`）时控制页提示未配置：执行 `./bin/server obs credentials ensure` 补齐 `OBSERVABILITY_USERNAME` 与 `OBSERVABILITY_CONSOLE_TOKEN`，再 `./bin/server restart`（主服务与观测进程都要读到同一个令牌）
+- PWA 外壳由 Service Worker 网络优先缓存，发布新静态资源后前台打开即更新；如遇旧版本，iOS 上删除桌面图标重新添加即可
 
 ### 超时验证边界
 

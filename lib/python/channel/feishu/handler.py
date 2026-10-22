@@ -14,7 +14,14 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from app.commands import execute_daily_command, parse_daily_command, parse_reminder_command, process_command
+from app.commands import (
+    execute_daily_command,
+    execute_memory_command,
+    parse_daily_command,
+    parse_memory_command,
+    parse_reminder_command,
+    process_command,
+)
 from app.config import Settings
 from app.skills import build_skill_summary
 from channel.feishu.client import FeishuClient, FeishuClientError
@@ -59,6 +66,7 @@ class FeishuWebhookHandler:
         reminder_scheduler: ReminderScheduler | None = None,
         daily_scheduler: DailyTaskScheduler | None = None,
         message_queue: SessionMessageQueue | None = None,
+        dream_runner: Any | None = None,
     ) -> None:
         self._settings = settings
         self._feishu_client = feishu_client
@@ -68,6 +76,7 @@ class FeishuWebhookHandler:
         self._task_registry = task_registry
         self._reminder_scheduler = reminder_scheduler
         self._daily_scheduler = daily_scheduler
+        self._dream_runner = dream_runner
         self._message_queue = message_queue or SessionMessageQueue(max_pending=10)
         # Cross-turn claims on generated image files. The generated-images
         # directory is shared by every session (one pi work dir), so without
@@ -142,6 +151,21 @@ class FeishuWebhookHandler:
                 chat_id=event.chat_id,
                 daily=daily,
                 trace_id=trace_id,
+            )
+            return
+
+        memory_action = parse_memory_command(event.text)
+        if memory_action is not None:
+            reply = await execute_memory_command(
+                memory_action, self._dream_runner, channel="feishu", target_id=event.chat_id,
+                session_key=session_key,
+            )
+            await self._safe_reply(
+                message_id=event.message_id,
+                chat_id=event.chat_id,
+                text=reply,
+                trace_id=trace_id,
+                request_uuid=f"{event.message_id}-memory",
             )
             return
 

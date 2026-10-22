@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -8,22 +9,52 @@ from core.agent.types import AgentClient
 from core.session.manager import SessionManager
 
 
-def build_help_text(*, include_remind: bool = True) -> str:
-    lines = [
-        "可用命令:",
-        "/help - 查看帮助",
-        "/new - 新建会话（不继承历史）",
-        "/reset - 清空当前会话上下文",
-        "/compact /compress - 上下文由 pi 自动管理，不支持手工压缩",
-        "/stop - 终止当前正在运行的任务",
-        "/backend /pi - 查看唯一后端 pi",
-        "/skills - 列出本机可用 skills",
+@dataclass(frozen=True, slots=True)
+class CommandSpec:
+    command: str
+    usage: str
+    description: str
+    channels: frozenset[str]
+    aliases: tuple[str, ...] = ()
+    subcommands: tuple[str, ...] = ()
+
+
+_ALL_CHAT_CHANNELS = frozenset({"feishu", "wechat", "web"})
+_IM_CHANNELS = frozenset({"feishu", "wechat"})
+COMMAND_SPECS = (
+    CommandSpec("/help", "/help", "查看可用命令", _ALL_CHAT_CHANNELS),
+    CommandSpec("/new", "/new", "新建不继承历史的对话", _ALL_CHAT_CHANNELS),
+    CommandSpec("/reset", "/reset", "清空当前对话上下文", _ALL_CHAT_CHANNELS),
+    CommandSpec("/compact", "/compact", "说明上下文的自动管理方式", _IM_CHANNELS, ("/compress",)),
+    CommandSpec("/stop", "/stop", "终止当前正在运行的任务", _ALL_CHAT_CHANNELS),
+    CommandSpec("/backend", "/backend", "查看当前唯一后端 pi", _ALL_CHAT_CHANNELS, ("/pi",)),
+    CommandSpec("/skills", "/skills", "列出本机可用 skills", _ALL_CHAT_CHANNELS),
+    CommandSpec("/remind", "/remind 10m 内容", "定时发送提醒（支持 s/m/h/d）", frozenset({"feishu", "web"}), ("/timer",)),
+    CommandSpec("/daily", "/daily HH:MM 提示词", "每日定时简报；支持 list、cancel", _ALL_CHAT_CHANNELS, subcommands=("list", "cancel")),
+    CommandSpec("/memory", "/memory", "查看长期记忆；支持 undo", _ALL_CHAT_CHANNELS, subcommands=("status", "undo")),
+    CommandSpec("/dream", "/dream", "整理当前对话记忆；支持 all", _ALL_CHAT_CHANNELS, subcommands=("all",)),
+)
+
+
+def command_catalog(channel: str) -> list[dict[str, Any]]:
+    return [
+        {"command": spec.command, "usage": spec.usage, "description": spec.description,
+         "aliases": list(spec.aliases), "subcommands": list(spec.subcommands)}
+        for spec in COMMAND_SPECS if channel in spec.channels
     ]
-    if include_remind:
-        lines.append("/remind 10m 内容 - 定时发送提醒（支持 s/m/h/d）")
-    else:
+
+
+def build_help_text(*, include_remind: bool = True, channel: str = "feishu") -> str:
+    selected = command_catalog(channel)
+    if not include_remind:
+        selected = [item for item in selected if item["command"] != "/remind"]
+    lines = ["可用命令:"]
+    for item in selected:
+        names = " ".join([item["command"], *item["aliases"]])
+        usage = item["usage"] if not item["aliases"] else item["usage"].replace(item["command"], names, 1)
+        lines.append(f"{usage} - {item['description']}")
+    if not include_remind:
         lines.append("/remind - 微信渠道暂不支持")
-    lines.append("/daily HH:MM 提示词 - 每日定时简报（/daily list 查看，/daily cancel <id> 取消）")
     return "\n".join(lines)
 
 
@@ -109,8 +140,44 @@ async def execute_daily_command(daily: DailyCommand, scheduler: Any, channel: st
     lines = ["每日简报任务:"]
     for task in tasks:
         summary = task.prompt if len(task.prompt) <= 30 else f"{task.prompt[:30]}…"
-        lines.append(f"- {task.task_id[:8]} {task.hour:02d}:{task.minute:02d} [{task.channel}] {summary}")
+        paused = "（已停用）" if not getattr(task, "enabled", True) else ""
+        lines.append(f"- {task.task_id[:8]} {task.hour:02d}:{task.minute:02d} [{task.channel}]{paused} {summary}")
     return "\n".join(lines)
+
+
+_MEMORY_USAGE = ("用法: /memory 查看记忆状态 | /memory undo 撤销最近一次 Dream 整理 | "
+                 "/dream 整理当前对话 | /dream all 整理全部对话")
+
+
+def parse_memory_command(raw_text: str) -> str | None:
+    """Return "status" | "undo" | "dream" | "dream_all" | "invalid", or None when not a memory command."""
+    words = raw_text.strip().lower().split()
+    if not words or words[0] not in {"/memory", "/dream"}:
+        return None
+    if words == ["/dream"]:
+        return "dream"
+    if words == ["/dream", "all"]:
+        return "dream_all"
+    if words in (["/memory"], ["/memory", "status"]):
+        return "status"
+    if words == ["/memory", "undo"]:
+        return "undo"
+    return "invalid"
+
+
+async def execute_memory_command(action: str, runner: Any, channel: str, target_id: str,
+                                 session_key: str | None = None) -> str:
+    if action == "invalid":
+        return _MEMORY_USAGE
+    if runner is None:
+        return "记忆整理组件未启用。"
+    if action == "dream":
+        return runner.trigger(channel=channel, target_id=target_id, session_key=session_key)
+    if action == "dream_all":
+        return runner.trigger(channel=channel, target_id=target_id)
+    if action == "undo":
+        return await runner.undo()
+    return await asyncio.to_thread(runner.status)
 
 
 def process_command(

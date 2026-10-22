@@ -48,6 +48,14 @@ graph TB
     H1 --> RS[ReminderScheduler]
     PI --> SK[app.skills<br/>技能发现与摘要]
     PI --> MC[app.memory / app.clock<br/>记忆与时间注入]
+    DR[app.dream<br/>离线记忆整理] -->|complete 一次性调用| PI
+    OBS[observability.web<br/>控制台 38080] -->|console Token 回环| CON[app.console<br/>白名单配置 / 动作]
+    CON --> DR
+    CON --> DS
+    CON --> PI
+    DR --> MC
+    H1 --> DR
+    H2 --> DR
 ```
 
 `app.main` 不再构造路由器或保存 `active_backend`。`core.agent.types.AgentClient` 是供渠道、调度器和测试替身使用的轻量 Protocol，不是多后端扩展框架；同模块定义 `AgentClientError` / `AgentClientCancelled`
@@ -60,7 +68,7 @@ Ferry/
 ├── conf/                       # 配置模板、模型注册表、依赖、pytest 配置、观测托管模板
 ├── lib/
 │   ├── python/
-│   │   ├── app/                # 入口、配置、命令、skills、记忆、时间、日志
+│   │   ├── app/                # 入口、配置、命令、skills、记忆（NOTE-FORMAT 解析 / Dream / 迁移）、时间、日志
 │   │   ├── channel/
 │   │   │   ├── feishu/         # 飞书渠道全链路
 │   │   │   └── wechat/         # 微信渠道
@@ -82,6 +90,13 @@ Ferry/
 - `PI_WORK_DIR` 是最终 cwd，默认 `./runtime/codex-workdir/pi`；保留旧路径名称是为了兼容会话，不表示仍支持旧后端
 - pi 映射默认 `runtime/server/pi-sessions.json`，pi transcript 默认在 `~/.pi/agent/sessions/` 下按 cwd 组织
 - 提醒与每日任务分别持久化到 `runtime/server/reminders.json`、`runtime/server/daily-tasks.json`；长期记忆及微信 sidecar 状态沿用既有文件
+- Dream 状态与运行记录在 `runtime/server/dream/`，记忆元数据投影在 `runtime/server/memory-index.json`；session_key → session_id 追加台账 `runtime/server/pi-session-history.jsonl` 让 `/new` 之后的旧会话仍可归属
+- 控制台：观测进程校验登录 Cookie + 会话 CSRF 与来源后，带 `OBSERVABILITY_CONSOLE_TOKEN` 转发到主服务 `/internal/console/*`（`app/console_api.py`，仅回环）；`app/console.py` 按白名单校验后直接改 `Settings` 单例并调用钩子（Dream `reschedule()`、`PiCliClient.set_runtime_options()`、日志级别），持久化到 `runtime/server/console-settings.json`，启动时在 `.env` 之后加载
+- PWA 聊天：浏览器 → 观测进程 cookie/同源校验 → 独立 chat Token → 主服务 `/internal/chat/v1`（`app/chat_api.py`）→ `WebChatService` → 共用 Pi。观测代理不持有 Agent；NDJSON 流式转发，15 秒 heartbeat；断流只解绑订阅，按 turn/seq 重新获取完整快照，显式取消保留 owner/client_turn_id 校验
+- Web 可见历史由 `app/web_chat_store.py` 存在 `runtime/server/web-chat/`，与原生 Pi 上下文分离；thread ID 生成 `web:<id>` key，重置只旋转 Pi 上下文，删除退休 key 并停止关联调度，不删除全局 transcript。附件先预约 opaque ID 再流式上传，路径仅用于主服务内部送 Pi
+- Web Push 由主服务 `app/web_push.py` 持有订阅/VAPID/outbox，网关代理受 CSRF 保护的订阅与已读操作；发送前反向回环检查观测会话有效性。最终回复或定时消息与待通知元数据同次落盘，再由有界后台发送器转交浏览器推送服务；不引入数据库、不将消息正文发送到锁屏
+- 推送渠道：`push_daily_result` 显式分发 feishu / wechat / email（`app/mailer.py`，163 SMTP SSL），未知渠道报错；PWA 不接入离线推送，Web `/dream` 在当前 NDJSON 流返回
+- Dream 经 `PiCliClient.complete()` 起独立 CLI 子进程（`--no-tools --no-session --no-mcp --no-context-files`），不占 worker 池、不计入熔断，也不注入记忆块
 - `SessionManager` 不持久化对话历史，附件通知、消息队列与运行中任务为内存态
 - 不再读写后端选择状态；旧状态文件和其它用户运行数据不自动删除
 - 现有 pi cwd、session store、agent dir 不自动迁移；配置回退与迁移约束见 [routing.md](routing.md)
@@ -97,7 +112,7 @@ Ferry/
 - HTTP 初始化沿用 pi 原生代理/NO_PROXY 与空闲超时设置，相同配置复用 dispatcher，配置变化后有界释放旧连接
 - JSONL 请求带关联 ID，`ferry_done` 在 prompt、重试/压缩及清理完成后发出；`agent_end` 不代表可复用
 - 取消/超时先 SIGTERM，让 pi 清理独立 bash 进程组，1 秒后仍未退出则 SIGKILL；Linux 下额外记录该 worker 的后代 PID/启动时间/PGID，Node 卡死或崩溃也能回收独立工具组，并防止 PID 复用误杀。失败的 worker 不回池，后续按需补建；关闭服务回收全部 worker
-- 需配置 `PI_NODE_BIN`（与 pi 匹配的 Node，当前验证 22.23.2）和 `PI_SDK_MODULE`（安装目录的 `dist/index.js` 绝对路径）；当前适配锁定 pi 0.84.2，升级 pi 后需回归再调整版本约束
+- 需配置 `PI_NODE_BIN`（与 pi 匹配的 Node，当前验证 22.23.2）和 `PI_SDK_MODULE`（安装目录的 `dist/index.js` 绝对路径）；当前适配锁定 pi 1.2.0，升级 pi 后需回归再调整版本约束
 - 设置 `PI_PERSISTENT_ENABLED=false` 并重启可回退原 CLI，不迁移/清空会话。其它模型、thinking、规则配置仍沿用 `conf/.env`
 - 观测：`pi.worker_ready` 记录启动耗时/PID；`pi.worker_turn_ready` 记录逐轮准备耗时与是否复用；`pi.worker_first_text` 记录本次 lease 到首字耗时；`pi.tool_call` / `pi.tool_result` 记录单个工具的开始时刻、耗时与成败。`pi.chat/stream.duration_ms` 仍是包含池等待、重试等的完整调用耗时。飞书每次出站请求由 client 传输层统一打点 `duration_ms` / `attempt`；日志 formatter 收全部 extra 字段，不再维护白名单
 

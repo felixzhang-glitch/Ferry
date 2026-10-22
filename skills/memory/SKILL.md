@@ -1,12 +1,13 @@
 ---
 name: memory
-description: Long-term memory operations for Ferry. Use this skill when the user explicitly asks to remember, update, review or forget a personal fact (记住 / 记一下 / 存下来 / 以后都 / 别忘了 / 看下我的记忆 / 把某条删了). Memory lives as markdown files under the project's memory/ directory, one file per configured category, and is injected into every turn's context. Never record facts the user merely mentioned in passing.
+description: Long-term memory operations for Ferry. Use this skill when the user explicitly asks to remember, update, review or forget a personal fact (记住 / 记一下 / 存下来 / 以后都 / 别忘了 / 看下我的记忆 / 把某条删了). Memory lives as NOTE-FORMAT markdown files under the project's memory/ directory, one file per configured category, and is injected into every turn's context. Never record facts the user merely mentioned in passing — offline Dream consolidates those.
 ---
 
 # memory
 
 Ferry 的长期记忆。记忆内容保存在项目根 `memory/` 目录，每个类别一个 markdown 文件，
-由 `MEMORY_CATEGORIES` 配置决定，常驻类别每轮自动注入上下文。
+由 `MEMORY_CATEGORIES` 配置决定，常驻类别每轮自动注入上下文。文件遵循 basic-memory 的
+NOTE-FORMAT：frontmatter 说明这个类别是什么，observation 记录事实。
 
 ## 何时使用
 
@@ -18,7 +19,47 @@ Ferry 的长期记忆。记忆内容保存在项目根 `memory/` 目录，每个
 - 删除：「把股票那条删了」「忘掉我说的地址」
 
 **不要使用的情况：** 用户在正常对话中顺带提到某个事实（例如聊天时说「我今天打了羽毛球」），
-不要主动写入。记忆是用户显式授权的动作，不是你的自动行为。
+不要主动写入。离线的 Dream 每晚会从对话里提炼长期事实、合并重复、归档过期条目，
+对话中你只处理用户明确授权的记忆动作。
+
+## 文件结构
+
+```markdown
+---
+title: 健康与身体数据
+type: memory
+permalink: memory/health
+category: health
+nature: timeseries
+description: 身体与健康数据：体重、运动、作息、身体状况。
+---
+
+# 健康与身体数据
+
+## Observations
+- [weight] @2026-07-30 体重 70kg (source: user)
+- [exercise] @2026-10-19 每周打羽毛球 2 次 (source: dream 2026-10-20)
+
+## 已归档
+- [weight] @2026-05-02 体重 72kg (source: user; archived: 2026-07-30)
+```
+
+- frontmatter（两行 `---` 之间）由系统维护，**不要改动**。
+- `nature` 提示这个类别默认是状态事实（`state`）还是时序事实（`timeseries`）。
+- `## 已归档` 之后的条目视为已删除，不再注入上下文。
+
+## 条目格式
+
+```markdown
+- [key] @YYYY-MM-DD 内容 (source: user)
+```
+
+- `key`：小写英文短词，`[a-z][a-z0-9_]*`，描述这条事实是什么，如 `weight`、`city`、`coffee`、
+  `position`。**同一主题沿用文件里已有的 key**，不要同义换词（体重一律 `weight`）。
+- `@YYYY-MM-DD`：事实成立的日期，用本轮注入的当前时间，不要凭记忆猜日期。
+- 内容：一条一个事实，单行；**不要使用半角括号**（行尾的半角括号组会被解析成元数据），需要时用全角（）。
+- 行尾 `(source: user)`：你在对话中按用户要求写入的条目一律标 `source: user`。
+  `source: dream …` 是 Dream 推断写入的，`source: migrated` 是旧格式迁移来的。
 
 ## 类别归属
 
@@ -36,34 +77,25 @@ Ferry 的长期记忆。记忆内容保存在项目根 `memory/` 目录，每个
 
 ## 时序事实 vs 状态事实
 
-这是写入方式的分界，判断标准是「旧值是否还有价值」：
+判断标准是「旧值是否还有价值」：
 
-- **时序事实**：旧值构成趋势，有分析价值。→ **追加**新条目，保留旧条目。
-  例：体重 70kg → 68kg，两条都留着才能看出在减；仓位变化同理。
-- **状态事实**：旧值一旦过期就是错误信息。→ **原地覆盖**旧条目。
-  例：住址从 A 搬到 B，留着 A 只会让你答错。
+- **时序事实**：旧值构成趋势。→ 用同一个 key **追加**新条目，保留旧条目。
+  例：`[weight]` 70kg → 68kg，两条都留着才能看出在减；仓位变化同理。
+- **状态事实**：旧值一旦过期就是错误信息。→ **原地覆盖**旧条目（内容和日期都更新）。
+  例：`[address]` 从 A 搬到 B，留着 A 只会让你答错。
 
 拿不准时按状态事实处理（覆盖），避免记忆里堆积矛盾信息。
-
-## 条目格式
-
-```markdown
-- [2026-07-30] 体重 68kg，比上月降 2kg
-```
-
-日期用本轮 hook 注入的当前时间（`%Y-%m-%d`），不要凭记忆猜日期。
-一条一个事实，不要把多个事实塞进一行。
 
 ## 操作步骤
 
 ### 新增 / 更新
 
 1. 判断类别，读取 `memory/<类别>.md` 当前内容。
-2. 检查是否已有同主题条目：
-   - 无 → 在正文末尾（`## 已归档` 之前）追加新条目。
+2. 检查是否已有同 key 或同主题条目：
+   - 无 → 在 `## Observations` 下最后一条之后追加新条目（在 `## 已归档` 之前）。
    - 有且为时序事实 → 追加新条目，旧条目保持原样。
-   - 有且为状态事实 → 原地替换该行内容与日期。
-3. 写回文件。
+   - 有且为状态事实 → 原地替换该行的内容与日期，`source` 改为 `user`。
+3. 写回文件（只改目标行，不动 frontmatter 和其他行）。
 4. 回执：`已记入 memory/<类别>.md：<条目原文>`
 
 ### 查看
@@ -77,12 +109,12 @@ Ferry 的长期记忆。记忆内容保存在项目根 `memory/` 目录，每个
 
 ### 删除（软删除）
 
-不要物理删除。把条目移到该文件末尾的 `## 已归档` 小节，并标注归档日期：
+不要物理删除。把整行移到该文件末尾的 `## 已归档` 小节，并在行尾括号里追加归档日期：
 
 ```markdown
 ## 已归档
 
-- [2026-07-30 归档] [2026-05-02] 旧的住址信息
+- [address] @2026-05-02 旧的住址信息 (source: user; archived: 2026-07-30)
 ```
 
 小节不存在时创建。回执：`已归档 memory/<类别>.md：<条目原文>`
@@ -96,13 +128,11 @@ Ferry 的长期记忆。记忆内容保存在项目根 `memory/` 目录，每个
 - 无法判断用户是要纠错还是记录变化时，按纠错处理（覆盖）并在回执里说明，
   不要为此反问用户。
 
-## 归档与合并
+## 整理与 Dream
 
-单个类别超过 80 行时主动整理，因为常驻类别每轮都消耗上下文预算：
-
-- 同一主题的多条时序记录，保留最早、最新和有转折意义的节点，中间的合并成一条概述。
-- `recent` 里超过 3 个月的条目移入 `## 已归档`。
-- 整理属于维护动作，做完在回复里一句话说明即可。
+合并重复、归档过期（`recent` 超过 90 天）等整理工作由 Dream 每晚自动完成，变更会推送摘要，
+用户可以发 `/memory undo` 撤销最近一次整理，`/memory` 查看状态，`/dream` 立即整理一次。
+对话中除非用户明确要求，不要自己做批量整理。
 
 ## 硬约束
 

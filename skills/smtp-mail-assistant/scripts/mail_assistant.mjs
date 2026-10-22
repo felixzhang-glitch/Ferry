@@ -9,7 +9,6 @@ import crypto from "node:crypto";
 
 const DEFAULT_SUBJECT = "Message from SMTP Mail Assistant";
 const DEFAULT_BODY = "Sent by SMTP Mail Assistant.";
-const DEFAULT_EMAIL_ADDRESS = "toolkit_t@163.com";
 const DEFAULT_SMTP_HOST = "smtp.163.com";
 const DEFAULT_SMTP_PORT = 465;
 const DEFAULT_POP3_HOST = "pop.163.com";
@@ -595,7 +594,7 @@ async function listRecentEmails(config, action) {
 function parseArgs(argv) {
   const args = {
     instruction: null,
-    email: process.env.MAIL_ASSISTANT_EMAIL || DEFAULT_EMAIL_ADDRESS,
+    email: process.env.MAIL_ASSISTANT_EMAIL || "",
     authCode: process.env.MAIL_ASSISTANT_AUTH_CODE || "",
     smtpHost: process.env.MAIL_ASSISTANT_SMTP_HOST || DEFAULT_SMTP_HOST,
     smtpPort: Number(process.env.MAIL_ASSISTANT_SMTP_PORT || DEFAULT_SMTP_PORT),

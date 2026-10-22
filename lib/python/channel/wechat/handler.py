@@ -14,7 +14,9 @@ from fastapi import HTTPException
 from app.commands import (
     build_help_text,
     execute_daily_command,
+    execute_memory_command,
     parse_daily_command,
+    parse_memory_command,
     parse_reminder_command,
     process_command,
 )
@@ -31,7 +33,7 @@ from observability.telemetry import emit, observe_run, set_status, take_run_id
 
 logger = logging.getLogger(__name__)
 
-WECHAT_HELP_TEXT = build_help_text(include_remind=False)
+WECHAT_HELP_TEXT = build_help_text(include_remind=False, channel="wechat")
 
 
 @dataclass(slots=True)
@@ -62,6 +64,7 @@ class WeChatWebhookHandler:
         task_registry: ActiveTaskRegistry,
         daily_scheduler: DailyTaskScheduler | None = None,
         message_queue: SessionMessageQueue | None = None,
+        dream_runner: Any | None = None,
     ) -> None:
         self._settings = settings
         self._agent_client = agent_client
@@ -69,6 +72,7 @@ class WeChatWebhookHandler:
         self._deduplicator = deduplicator
         self._task_registry = task_registry
         self._daily_scheduler = daily_scheduler
+        self._dream_runner = dream_runner
         self._message_queue = message_queue or SessionMessageQueue(max_pending=3)
 
     async def handle_webhook(self, headers: Mapping[str, str], raw_body: bytes) -> dict[str, Any]:
@@ -138,6 +142,14 @@ class WeChatWebhookHandler:
                 scheduler=self._daily_scheduler,
                 channel="wechat",
                 target_id=event.user_id,
+            )
+            return self._split_reply(reply)
+
+        memory_action = parse_memory_command(event.text)
+        if memory_action is not None:
+            reply = await execute_memory_command(
+                memory_action, self._dream_runner, channel="wechat", target_id=event.user_id,
+                session_key=session_key,
             )
             return self._split_reply(reply)
 

@@ -6,11 +6,16 @@
 
 pi 是唯一后端。飞书与微信每轮只向 `PiCliClient` 传当前 `user` 消息，不拼接历史、不缓存 assistant 回复。pi 的 `--session-id` 接受调用方生成的 ID，不存在时按该 ID 新建；映射由 `PiCliClient` 管理，历史持久化与上下文压缩由 pi 管理
 
-- 会话 ID 映射：飞书 `user_id:chat_id`、微信 `wechat:account_id:user_id` -> Ferry 生成的 uuid4 hex
+- 会话 ID 映射：飞书 `user_id:chat_id`、微信 `wechat:account_id:user_id`、PWA `web:<服务端 thread_id>` -> Ferry 生成的 uuid4 hex；登录 Cookie 不参与 Pi 会话命名
 - 持久化：`PI_SESSION_STORE_PATH`，默认 `runtime/server/pi-sessions.json`
 - pi 侧会话文件：默认 `~/.pi/agent/sessions/` 下按 cwd 分目录的 JSONL 树；设置 `PI_CODING_AGENT_DIR` 时使用对应 agent 目录
 - `/new`、`/reset`：清附件通知并删除映射，下轮自然生成新 uuid（旧会话在 pi 侧保留）
+- 归属台账：每次新建 session_id、以及 `/new` / `/reset` 删除映射之前，追加 `{at, session_key, session_id}` 到 `runtime/server/pi-session-history.jsonl`（与映射同目录），`/new` 之后旧 transcript 仍能归属到原会话 key，供 Dream 读取
 - 首轮判定：靠“映射是否新建”而不是“session_id 是否为空”，skills 摘要只在首轮注入
+
+### PWA 可见会话
+
+`WebChatStore` 仅保存浏览器可见的消息、线程标题、附件元数据和 turn 状态，不参与 Pi 历史拼接。刷新/登录后从服务端恢复界面；崩溃残留 streaming turn 标为 interrupted。`/new` 新建独立线程，`/reset` 保留可见历史并插入上下文重置边界；删除线程取消任务、删除 Web ledger/附件、退休 Pi key，但不删除全局 Pi transcript。Web 线程删除后不再被 Dream 收集；已提炼长期记忆不随线程删除而移除。
 
 ### 常驻运行时
 

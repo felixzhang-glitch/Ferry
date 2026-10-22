@@ -3,6 +3,190 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-10-22 · v0.13.0：README 重写与公开发布隐私收口
+
+- README 按当前 PWA／飞书／微信、独立控制台、统一模型、NOTE-FORMAT／Dream 与通知功能重写，明确安装配置、私有规则和业务数据边界；应用版本同步为 0.13.0。
+- `rules/system.md` 停止跟踪并加入忽略规则，本机文件及内容保留；`rules/admin.md` 继续私有。补充依赖目录忽略与规则路径发布闸门，新源码不含这些私有文件；历史内容不因停止跟踪而消失，升级前需备份规则并在 Git 更新后恢复。
+- 用户选择本机保留、公开脱敏：聊天署名迁移至私有 `OBSERVABILITY_USER_DISPLAY_NAME`，默认“我”；新安装默认用户名为 `admin`，已有账号不变。署名仅通过认证 Cookie 聊天会话返回，不进入公开品牌或静态资源；退出后清空。
+- 发布前对照私有配置检查时发现邮件技能含个人邮箱默认值；移除公开默认账号，改用显式 `MAIL_ASSISTANT_EMAIL`，本机原账号固化到私有邮件配置，授权码不改。该邮箱曾出现在旧提交中，本次不改写远端历史。
+- 运行验证：隔离真实应用与浏览器确认配置署名、HTML 字符纯文本显示、刷新／退出、匿名与只读请求不暴露署名、聊天请求不带署名；邮件 CLI 使用合成账号 dry-run，不外发，缺账号明确报错。仅重启控制台加载私有署名，原登录保留、主服务与微信不重启。
+- 发布要求：检查完整源码快照、暂存内容和每个待推提交，保留 pre-push 密钥钩子与 preflight 闸门；私有规则、配置、运行数据、记忆正文、测试和本地依赖不进入版本源码。未重跑测试／类型检查，iPhone 真机键盘仍待设备确认。
+
+## 2026-10-22 · PWA v8 上线与真实模型验收
+
+- 用户授权上线，并明确允许创建短期验收会话；备份当前工作区、配置、运行数据及准确的 v8 前源码。确认无在途工作后，仅重启主服务和控制台，微信 sidecar 未重启。
+- 私有 `.env`、观测配置、Nginx、密码、已有有效登录与通知配置均未修改；旧 Web 专用模型变量留在配置中但不再生效。主服务预热期间短暂出现 503，随后主服务／控制台健康与公开 HTTPS 页面均为 200。
+- 生产浏览器：新建合成验收线程，真实 DeepSeek 回复后刷新恢复；设置切至 Qwen 保存并刷新，下一轮真实回复成功。仅检查该线程的 Pi 原生元数据，确认两轮分别为 DeepSeek／Qwen、正常结束且无工具调用。验收后恢复原有共享 DeepSeek V4.1 Flash／low，保留原覆盖状态。
+- 界面：v8 纯文本输入、左抽屉及左右滑动、图标复制／改名、320px 长标题、明暗主题、命令菜单触摸、多行／纯文本粘贴／撤销、模拟键盘发送按钮可见均通过真实 HTTPS 浏览器观察；截图已查看，其他会话在抽屉截图中遮盖，浏览器无错误。
+- 安全：内部路由对外 404，缺 CSRF、跨站、same-site、跨用途及重复 CSRF 拒绝；正确令牌下缺失／null Origin 能到达模型白名单校验，非法选项返回 422；v8 SW 已激活。
+- 清理：校验合成提示词后仅删除本轮验收线程，登出撤销临时会话并删除本地 Cookie；既有有效会话保留，最终无 Web 在途任务。备份和证据仅存 gitignored runtime；未运行测试／类型检查，未实发 IM／邮件，未提交／推送。
+- 边界：线上应用与浏览器已验收；iPhone 原生键盘辅助栏、安全区和用户实际输入法仍需真机确认，不将 Chromium 模拟视为设备通过。
+
+## 2026-10-22 · PWA 聊天微调与全渠道统一模型
+
+- 需求：去掉会话列表“我的对话”和改名／复制文字，使用小图标；会话抽屉改左侧，修复长标题、安全区和输入区观感；处理 iOS 键盘辅助栏及系统设置模型保存报错。
+- 用户新决定：PWA、飞书、微信统一使用模型与思考强度，替代此前 Web 独立模型策略；移除 `WEB_PI_MODEL/WEB_PI_THINKING`，Web 每日任务也跟随共享配置。当前轮及其自动重试固定原参数，下一轮读取新设置；Dream 独立模型与渠道会话隔离不变。
+- 安全：七个控制台写接口补齐用途独立、绑定登录会话的 CSRF；正确令牌下兼容缺失／null Origin，显式跨站、重复头、错误／跨会话／聊天用途令牌仍拒绝。登录／登出的严格 Origin 校验不变，设置错误不自动重放。
+- 交互：左抽屉及对应滑动方向，改名与复制图标保留 44px 热区和可访问名称；纯文本编辑区保留移动换行、桌面发送、IME、草稿与流式竞态保护，安全粘贴不引入 HTML。iOS 原生辅助栏不是页面元素，实际移除效果须设备确认。
+- 验证：本轮不运行测试套件／类型检查，使用隔离真实主服务、控制台、合成 Pi 子进程及本地 IM 回发接口。浏览器实际切换／恢复模型、隔离服务重启后保留设置并继续按新值调用、当前轮重试参数不变、下一轮 PWA 及两路 IM 使用新值；安全接口矩阵覆盖正确、缺失、null、跨站、重复头和跨会话／跨用途令牌。左抽屉与滑动、图标复制／改名、长标题、320px／横屏／明暗主题、原生多行与 Chromium IME、纯文本粘贴／撤销、长度反馈恢复、命令触摸、历史锚点、附件、停止、草稿和删除确认均经运行观察；截图已查看，浏览器无错误。v8 SW 仅缓存外壳。iPhone 原生辅助栏、安全区及实际输入法仍待用户真机确认，未将模拟结果当作设备通过。
+- 影响：`app/{console,config,main,web_chat}.py`、`core/agent/pi_cli.py`、`observability/{security,chat,web}.py`、PWA 聊天／设置静态资源、SW 外壳版本、示例配置、既有测试和相关文档。保留当前工作区改动，不修改私有配置／真实会话，不重启或发布生产服务，不提交／推送。
+
+## 2026-10-22 · PWA 更新上线与生产验收
+
+- 用户授权上线：先备份当前工作树、私有配置、Nginx snippet 和运行数据；确认无在途会话后，仅重启主服务与独立控制台，微信 sidecar 保持原进程。
+- 部署：生产主服务使用 pyenv Python，而非本地验证的 `.venv`；补齐已验证的 pywebpush 2.3.0 / py-vapid 1.9.2，保留 cryptography 44.0.3。私有 `.env` 显式设置 Web Qwen/off 与启用 Web Push、HTTPS 联系地址；其余配置、密码和已有有效登录保持不变。同步 Nginx 资源白名单，配置检查通过后 reload。
+- 线上结果：主服务/控制台健康，HTTPS 页面、appearance.js、notifications.js、品牌接口、manifest、v7 SW 为 200；内部路由对外 404，缺 CSRF 403、非法通知目标 422。共享虚拟主机资源通过本机 TLS 路由验证；其公共 DNS 当前无法解析，不属于本次变更。
+- 浏览器：真实 HTTPS + 触摸 Chromium 完成新建图标、斜杠菜单拖动/点选、左滑右侧列表、自动标题/署名、真实 Pi 回复及刷新恢复；原生记录确认 Qwen/off、无思考块和工具调用，最终正文与 Web 落盘一致。外观原值保存、头像实际上传/重载和恢复默认、非法图片拒绝均通过，截图已查看、浏览器无错误。
+- 通知：服务已启用，VAPID/订阅文件权限 0600；设备尚需用户在 PWA 内授权。验收浏览器权限为 denied，未伪报真实系统推送送达；iPhone 锁屏通知、缩放和硬件触感仍待真机确认。
+- 清理：仅删除明确匹配本次合成提示词的新验收线程，撤销短期验收登录及本地 Cookie；原有有效登录保留。备份与证据仅存 gitignored runtime，本次未跑测试、未提交/推送代码，未实发 IM/邮件。
+- 影响：生产主服务、独立控制台、Nginx 共享 snippet、`conf/.env` 的 `WEB_*` 配置及运行时外观/推送存储；上线前本地测试记录见下一条。
+
+## 2026-10-22 · PWA 移动交互、后台续流与消息通知
+
+- 需求：精简聊天头、修复斜杠菜单触摸滚动、PWA 防误缩放、用户署名调整、外观设置生效、会话自动命名、左滑右侧会话列表，并增加后台回复/提醒/每日任务通知；用户同意仅调整 Web 模型，不影响 IM。
+- 界面：左侧列表图标、右侧新建加号与 44px 热区；轻点选命令和拖动滚动分离，保留 IME；右侧抽屉手势避开输入/选文/代码横滚；standalone 缩放限制与 16px 输入字号；首条有效输入自动命名、手改优先、旧占位名回填。
+- 外观：确认现网旧进程对外观脚本/品牌接口返回 404；本轮完善本地图片解码缩小、保存/失败草稿、图标版本 404 和缓存更新。可见原生 switch 不充当隐藏马达代理；iOS 主屏幕名称/图标可能需重新添加，任意按钮触感不作硬件保证。
+- 正文：独立思考块原本未泄漏，近期污染来自模型 text 本身；末条 assistant text 完成回调修复跨消息拼接，旧正文不裁剪。隔离污染会话副本对照后，Web 默认 `bailian-plan/qwen3.8-flash` + `off`，线级核验 `enable_thinking=false`；小样本通过不代表对模型输出作永久保证。
+- 后台：运行与订阅分离，断流不取消；32 项订阅缓冲溢出重发完整快照，seq 去重，原 client_turn_id 幂等恢复。显式停止/注销/超时/删除/进程退出仍取消；重启不承诺续算。
+- 通知：标准 Web Push，主服务持有 0600 VAPID/订阅/有界 outbox；Cookie + CSRF，回环校验登录有效性，订阅 generation 防旧响应误删新实例；HTTPS 推送服务白名单、DNS 公网检查、禁止重定向、固定无正文通知。前台回复使用短租约与已读确认，不因切后台状态丢失直接吞通知；404/410 清订阅、瞬时失败有界退避。默认关闭，需部署配置与设备授权。
+- 定时：PWA 开放 `/remind`、`/timer`、`/daily`，结果幂等落目标会话，不伪造用户或加入 Pi 历史；Web 每日投送失败保留已生成答案；删除会话停止关联任务。
+- 验证：基线 1225 passed / 17 failed / 32 skipped，原有外观失败为错误码匹配契约；最终完整含 Chromium 回归 1404 passed、3 subtests passed，Node 34 passed，依赖检查与 diff 检查通过。真实隔离主服务/网关 + Chromium 完成触摸菜单滚动选择、右侧手势、自动标题/署名、刷新续流、头像实际保存与重载、提醒落库，截图已查看、浏览器无错误；另验证接受后主动断开 HTTP，后台完成并捕获回复通知（发送器仅本地记录，未外发）。WebKit 安装因 Debian 11 不受支持失败，实体 iPhone 缩放/触感/锁屏推送未验证。
+- 影响：`app/{web_chat,web_chat_store,chat_api,web_push,main,config,console,commands}.py`、`core/agent/{pi_cli,types}.py`、`core/session/{chat_contract,reminder_scheduler,daily_scheduler}.py`、`observability/{chat,web,security}.py`、PWA 静态资源、新 `notifications.js`、依赖/示例配置/Nginx 模板与测试文档。仅本地修改，未提交、未改生产私有配置、未重启生产或外发 IM/邮件。
+
+## 2026-10-21 · Markdown 表格、轻触尝试与 App 名称/头像自定义
+
+- 需求：修复聊天 Markdown 表格未渲染，增加 iOS 触感，在系统设置自定义 APP 名称和头像；用户确认继续纯 PWA、操作时轻触尝试可关闭（不承诺所有 iOS 或后台震动），外观同步界面和新安装资源，登录用户名不变
+- 表格：安全 DOM pipe table（对齐行、转义管道、代码跨度、流式不完整文本），横向滚动限在表格，不引入 raw HTML 或 CDN
+- 外观：观测进程独立文件存储，名称严格有界、头像实际解码 PNG/JPEG/WebP ≤2MiB、尺寸/像素限制、EXIF处理/中心裁剪/无元数据PNG及180/192/512/maskable尺寸，原子版本指针；Cookie/CSRF保护的外观接口不进入Pi或通用配置。名称/图标刻意公开用于登录/品牌/助手/manifest，已安装iPhone可能需重新添加
+- 轻触：共享同步用户手势助手、短促节流与可关闭，Vibration API 支持设备使用；iOS原生switch仅尝试，不宣称通用或硬件成功；不影响提交次数、焦点/IME，不在流式/计时器/后台触发
+- 验证：实施中，待实际 app/HTTP/浏览器验收；Pillow依赖已安装本机服务环境，未改线上凭证、进程或聊天数据
+- 影响：`observability/{appearance,web,chat}.py`、PWA静态资源、Pillow依赖、新静态资源Nginx白名单、本地回归定义和项目文档
+
+## 2026-10-21 · 聊天头精简、新对话入口与具体工具摘要
+
+- 用户要求：去掉最大「对话」标题及聊天右上改名/重置，修复左上新对话无效，工具过程说明更具体；确认展示短脱敏参数摘要，不加工具结果
+- 复现：实际手机触摸浏览器中，顶部“新对话”是 H2，点它不产生请求；抽屉中的创建按钮能正常切新 id。改为明确顶部操作按钮，创建进度/失败可见，保留桌面/抽屉统一入口与旧草稿；移除仅聊天页的冗余标题/头部操作，监控标题与刷新保留，改名用列表、重置用 `/reset`
+- 工具信息：按工具白名单参数生成实际脚本/文件/短命令/搜索词摘要，Pi 回调传出前脱敏，Web 防御性再处理；认证头、密码/密钥/JWT、环境赋值、私有文件、完整路径和内联代码不公开，合法“token行情”不会因关键词被整段隐藏；保持 summary 160 字、30 条有界旧 schema，开始摘要不被结束覆盖。折叠头直接显示实际操作，仍默认折叠
+- 运行时验证：实际 PiCliClient→本机事件进程→公开 HTTP 验证脚本/文件/查询、认证头/JWT/私有文件/内联代码与转义引号密码脱敏；桌面/触摸 Chromium 验证顶部/侧栏/抽屉新建、初始化读取中可创建、慢请求提示、失败保留、连点去重、流中切换保留旧草稿、折叠实际摘要/展开保持/历史恢复、390/320px 键盘偏移以及监控标题/刷新均通过，截图已查看、浏览器 0 错误。移除工具卡重复的加载描述，保留实际操作和当前阶段；本轮不重跑 CI/类型检查，实体 iOS 仍需用户确认；隔离验收未改生产配置或用户数据
+- 上线（用户确认）：无活跃/排队任务时仅重启 Ferry 主服务，微信/观测 PID 不变；健康与 HTTPS 200。真实模型只读 printf 请求生成具体摘要 `printf · chat-refine-ok`，实时进度和历史保存通过，保留「具体工具摘要上线验证」会话。SW shell v5，需重新打开 PWA 取新版；不改凭证/Nginx 或删除既有会话
+- 影响：`core/agent/pi_cli.py`、`app/web_chat.py`、PWA HTML/CSS/chat.js/必要导航与SW、本地回归定义及项目文档
+
+## 2026-10-21 · PWA 默认折叠工具活动与简洁附件入口
+
+- 需求（用户确认）：工具等待期能看到 Agent 在做什么，工具活动默认折叠；展开仅名称/进度/耗时/脱敏摘要，不展示完整参数和结果；附件按钮改 `+`，聊天简洁风
+- 链路：PiCliClient 在现有 start/end 解析点提供独立可选结构化回调，保留飞书/微信原 label/None；按 attempt 隔离工具 ID，中断不会与重试合并；Web 映射 opaque ID，实时 progress 快照有界背压，支持并行、错误/取消/中断；assistant 完成时原子保留活动摘要，旧记录无字段无需迁移
+- 隐私：至多 30 条、严格字段/长度/状态/耗时限制；使用描述性摘要，不发送原始命令/路径/参数/结果/思考；元数据纳入历史字节裁剪，不进入遥测
+- 界面：消息内 details 默认折叠，流式更新保留展开状态，完成/刷新可查看；`+` 保留可访问标签和 44px 触摸范围；工具块轻量、不挤输入区，PWA shell 版本更新
+- 运行时验证：独立实际应用经 PiCliClient + 本机事件进程 + HTTP 验证并行/失败/中断/重试 ID 隔离/30 条截断/危险名称、进程重启与历史恢复；真实 Chromium 首字前默认折叠、展开跨 delta/progress/done 保持、焦点与旧消息锚点不跳、+ 上传下载、390/320px 深色与键盘偏移通过，截图已查看、浏览器 0 错误。补回归定义但本轮未执行 CI/类型检查；本机移动模拟不等于实体 iPhone 验收
+- 上线（用户确认）：检查无活跃/排队任务后仅重启主服务，微信 sidecar 与观测 PID 不变，未改配置/凭证/既有数据。健康检查与 HTTPS 恢复；真实模型执行只读 printf 工具，实时活动与历史保留通过，保留「工具活动上线验证」对话。PWA shell v4，需重新打开取新版
+- 影响：`core/agent/{types,pi_cli}.py`、`app/{web_chat,web_chat_store}.py`、`static/{chat.js,dashboard.html,dashboard.css,sw.js}`、本地回归定义与项目文档
+
+## 2026-10-21 · 修复 iPhone PWA 发送与软键盘输入体验
+
+- 用户反馈：iPhone 主屏幕安装 PWA 无法发送，点输入框后上方历史不可见；线上 iPhone 创建/发送多次 403，但原日志未区分原因。独立实际应用对缺失/opaque 来源头复现 403，软键盘偏移时旧布局忽略 offsetTop、挤压消息区
+- 安全修复：既有 chat Token 用途隔离 HMAC 产生绑定登录 Cookie 的 CSRF，`/session` 仅 Cookie 聊天会话可取、前端仅内存，所有 chat 请求带 `X-Ferry-CSRF`。仅有效 CSRF 下兼容缺失/null 来源，显式跨站/foreign Origin、重复头、错误/跨登录 CSRF 继续拒绝；不改密码、凭证、SessionStore、login/console 来源规则或 CORS。拒绝日志只记录固定原因，不带头值/正文/会话标识
+- 输入修复：移动 pane 使用 visualViewport 高度+offsetTop、focus/resize/scroll 经 rAF 合并；键盘时压缩冗余顶栏、历史锚点保留、消息区可滚；紧凑输入框/附件有界；手机回车换行、按钮发送，组合输入完成才提交；发送不禁用 textarea，later draft 不被 accepted 清除，显式发送后跟随最新；SW shell v3，仅清 Ferry 旧 shell、不缓存正文
+- 运行时验证：实际独立 app/网关及触摸 Chromium，无 mock API 响应；旧来源请求 403→200，负向安全探测仍 401/403；键盘消息区约 229px、阅读锚点不变、发送按钮在可见区域，320px/横屏、多行/IME/连点/流式新草稿/导航恢复均通过，截图已查看，浏览器 0 错误。本轮未跑测试/类型检查；实体 iOS 软键盘尚需用户真机确认
+- 上线（用户确认）：仅重启 `ferry-observability`，主服务/微信 PID 不变，不改密码、凭证、Nginx 或用户聊天数据；HTTPS 200，部署客户端带 CSRF、shell v3，read Token 无法取得 CSRF，未登录 chat 401。实体 iPhone 需要关闭后台 PWA 再重新打开取新外壳，最终真机输入由用户确认
+- 影响：`observability/{chat,web}.py`、`static/{chat.js,dashboard.css,dashboard.html,sw.js}`、本地回归用例和相关文档；不改聊天/附件/Pi 数据
+
+## 2026-10-21 · PWA 聊天渠道部署上线
+
+- 用户明确授权部署；备份私有配置、Nginx snippet 与专用站点到 `runtime/deploy-backup-20261021-114003/`（私有配置 0600，目录 0700）；备份与验证截图均不入库
+- 仅补 `OBSERVABILITY_CHAT_TOKEN`，不改用户名、密码或既有凭证；同步新版 Nginx snippet。发现专用站点未 include snippet，已补引用，使 chat 的上传限额/流式超时与 internal 路由屏蔽实际生效；保留原 fallback 路由
+- `nginx -t` 通过后 reload；重启主服务与观测进程，微信 sidecar 未重启。聊天文件 0600、目录 0700；三个服务最终均 RUNNING
+- HTTPS 验收：页面/chat.js/manifest 为 200，未登录 chat API 为 401，internal chat/console 对外 404；只读 Token 不能调用聊天。临时验收会话仅保存哈希、5 分钟到期，验收后已注销，不改登录密码
+- 真实 Pi 经 PWA 返回验收成功；7.8KB 文档上传/删除通过，刷新后历史保留，斜杠补全、桌面/移动深色截图已查看，浏览器无错误，Web 渠道观测成功；保留「上线验证」对话供用户查看。实体 iOS 安装与软键盘仍待用户实机确认
+- 影响：私有观测配置、服务器 Nginx snippet/站点、主服务与观测进程、Web 运行数据及上线记录；未提交/推送 Git
+
+## 2026-10-21 · PWA 增加个人 Agent 聊天渠道（多会话、附件、核心斜杠补全）
+
+- 需求（用户确认）：在现有 PWA 增加聊天渠道；多会话列表，支持文本/图片/文件；核心命令 `/help`、`/new`、`/reset`、`/stop`、`/skills`、`/memory`、`/dream`、`/backend`，不开放 Daily/Reminder 或离线推送
+- 架构：浏览器复用用户名登录 → 观测进程 Cookie-only + 同源校验 → 独立 chat Token → 主服务内部 chat router → WebChatService → 共用 Pi；不重构现有飞书/微信执行路径。Web thread 用 `web:<服务端 id>` 隔离原生上下文；文件型可见历史不参与 Pi prompt 历史拼接
+- 交互：聊天优先导航、桌面线程侧栏/移动线程抽屉、新建/切换/重命名/删除、流式回复/进度/停止/重试、附件预览和移除、斜杠键盘补全；系统配置仍只选不写；安全 DOM Markdown，不支持原始 HTML
+- 安全与持久化：有界原子 ledger/附件，opaque ID 预约后上传 bytes，MIME/大小/签名校验，路径不公开；Cookie/read/console/chat 凭证分离；按路径 body 限额、频率、并发、输出/总超时；断流按原 client_turn_id 精确取消，登出取消该登录的任务；API/附件不缓存、不写浏览器正文存储
+- Dream/观测：web 作为一等渠道；Web `/dream` inline 回当前流，不外发；删除线程写 retirement 台账，后续 Dream 不再收集，不删除 Pi 全局 transcript 或已提炼长期记忆
+- 验证：全量 Python 1116 passed / 18 skipped（浏览器用例在独立环境另跑）；独立 Chromium 聊天 14/14 + 原监控 6/6；Node 回归 34/34；实际主服务 + 观测网关隔离实例通过多会话/图片文档/下载/斜杠/停止重试/reset/删除/刷新登录/移动 320px/深色/监控设置联调，浏览器 0 错误，截图已查看。生成与 IM 连接使用合成后端，未测试外部真实模型或实体 iOS 安装/软键盘；未变更线上凭证/nginx/用户运行数据，也未重启线上服务
+- 联调修复：路径脱敏尾匹配改 `\Z` 防末尾换行误缓冲；`/reset` 先保存命令回执再跨 context generation；缺失 MIME 的常见文档由前端规范化后严格验内容；子命令补全来自服务端目录；命令不消费附件、停止可重试；空会话加载结束显示欢迎界面
+- 影响：`app/{web_chat_store,web_chat,chat_api,main,commands,dream,config}.py`、`core/session/{chat_contract,message_queue}.py`、`core/agent/pi_cli.py`、`observability/{chat,web,config,credentials,telemetry,store}.py`、PWA 静态资源、nginx 模板、`bin/server`、`.env.example`、本地 tests 与项目文档
+
+## 2026-10-21 · 修复 Dream 漏读 `/new` 前的会话；`/dream` 默认只整理当前对话
+
+- 问题：10-20 22:46 手动、10-21 02:00 定时两次 Dream 都"无变更"。链路本身正常（模型能看到附件，复跑仍返回空 ops），根因是本周 46 条用户消息（微信 `748a5af2` 39 条、飞书 `006ff371` 7 条）所在会话在台账上线前被 `/new` 从 `pi-sessions.json` 删掉，Dream 找不到；且首次运行后 watermark 已越过它们
+- 修复：`PiCliClient.reset_session()` 删除映射前先把旧 session_id 追加到 `pi-session-history.jsonl`，台账上线前就存在的会话下次 `/new` 也不会丢
+- 新功能：`/dream` 默认只整理发起命令的对话（同一 session_key 下全部会话，含 `/new` 之前的），`/dream all` 整理全部（与定时、控制台一致）；`state.json` 新增 `chat_watermarks`，每个对话从 max(全局, 该对话 watermark) 开始读，`/dream` 只推进该对话的 watermark，全量运行推进全局并清掉已追平的对话 watermark，两者互不重复喂同一批消息；运行记录与 `last_run` 增加 `scope`；无新消息时回复"自上次整理以来没有新的对话"，与"没有发现需要记住的内容"区分
+- 线上数据修复：停主进程 → 备份 `state.json` / `pi-session-history.jsonl`（`.bak-20261021-095059`）→ 台账补回两个会话 → watermark 回退到 `2026-10-13T22:46:21+08:00` → 启动 → 控制台触发一次全量：读到 61 条用户消息（原 15 条），生效新增 4、更新 1（health / preference），memory 提交 `4acaf4c`，可 `/memory undo`
+- 验证：回归 979 passed / 5 skipped（新增对话范围、对话 watermark、台账补记、`/dream all` 路由用例）
+- 影响：`lib/python/app/{dream,commands}.py`、`core/agent/pi_cli.py`、`channel/{feishu,wechat}/handler.py`、`tests/test_{dream,wechat_handler}.py`、`docs/{memory,sessions,PRODUCT,RELIABILITY,TEST,functional-tests}.md`；`runtime/server/{dream/state.json,pi-session-history.jsonl}`（不入库）
+
+## 2026-10-20 · 可观测看板升级为 Ferry 控制台（PWA + 只选不写的系统配置 + DeepSeek Harness 风格 + 用户名登录），Dream 02:00 整理 / 08:00 邮件推送
+
+- 需求：看板改成控制台并支持 iOS 桌面 PWA、交互友好；新增系统配置模块（记忆整理时间、立即整理按钮、报告推送时间、渠道、定时任务等），只允许选择、不允许自定义写入；整体换成 DeepSeek Harness 风格；登录增加用户名（默认 `<配置的用户名>`，密码不变）；完成后执行记忆迁移、重启，Dream 默认 02:00，每天 08:00 邮件推送
+- 决策（用户确认）：8 点报告只发个人邮箱（工作邮箱进收件人清单作可选项）；会话 30 天并持久化（只存哈希）；任务 / 提醒显示前 20 字摘要；配色跟随系统明暗
+- 主服务：
+  - `app/console.py` 白名单配置（Dream 开关 / 整理时间 / 报告时间 / 推送目标 / 整理模型、对话模型、思考强度、记忆开关 / 常驻类别 / 注入上限、流式、日志级别），可选值由主服务生成，菜单外一律 422；改动即时生效（`DreamRunner.reschedule()`、`PiCliClient.set_runtime_options()`、`setLevel`）并持久化到 `runtime/server/console-settings.json`，启动时在 `.env` 之后加载，支持「恢复默认」
+  - `app/console_api.py` `/internal/console/*`：令牌 + 仅回环 + JSON ≤ 4KB；动作：立即整理、撤销、每日任务启停 / 改时间 / 改推送目标 / 删除（提示词不可改不可建）、取消提醒
+  - Dream：`DREAM_TIME` 默认 02:00，新增 `DREAM_REPORT_TIME`（默认 08:00，可 `immediate`），定时结果排队 `pending_report` 到报告时间推送、重启不丢、6h 补发；`DREAM_NOTIFY` 支持多目标与 `email:`；可唤醒的调度循环，运行中开关 / 改时间无需重启；`snapshot()` 只含时间、状态、计数
+  - `app/mailer.py`：163 SMTP SSL，授权码发送时才从 `MAIL_ENV_FILE` 读取（不进进程环境，pi 拿不到），SMTP 报错不回显；`push_daily_result` 显式分发 feishu / wechat / email，未知渠道报错；每日任务支持 `enabled` 与 `update()`，可推送到邮箱
+- 控制台（观测进程）：
+  - 登录 `{username, password}`，用户名常量时间比较且总跑 scrypt，统一提示；会话上限 30 天，持久化到 `runtime/observability/console-sessions.json`（0600，只存 SHA-256）
+  - `/api/observability/v1/console/*` 只认 Cookie + Origin，严格 schema 后带 `OBSERVABILITY_CONSOLE_TOKEN` 转发主服务；主服务不可达 503
+  - PWA：manifest / Service Worker（只缓存外壳，`/api/` 直通）/ 四个图标；CSP 增加 `manifest-src`、`worker-src`；`credentials ensure` 子命令补齐用户名与令牌；nginx 模板新增 PWA 资源并显式 404 `/internal/console/`
+  - 前端：DeepSeek Harness 风格（`#F9FAFB` / `#202124` / 强调 `#617BEB`，16px 面板、药丸控件、极轻阴影）+ 深色模式；桌面侧边栏、移动端底部标签栏与安全区；`console.js` 记忆整理 / 定时任务 / 系统设置三个模块，除登录外无文本输入框，toast + 底部确认层；监控面板逻辑保留
+- 上线：
+  - 记忆迁移 `--apply`：6 个文件 64 条全部转为 NOTE-FORMAT（0 条 legacy），memory 提交 `069d8e8`
+  - `conf/.env` 追加 `DREAM_TIME=02:00`、`DREAM_REPORT_TIME=08:00`、`DREAM_NOTIFY=email:<个人邮箱>`、`MAIL_*`；`.env.observability` 补齐 `USERNAME=<配置的用户名>`、`CONSOLE_TOKEN`，`SESSION_TTL_SECONDS=2592000`（两个文件均先做时间戳备份）
+  - nginx snippet 同步 + `nginx -t` + reload（旧版备份在 `runtime/nginx-backup/`）；`./bin/server restart`
+  - 上线自查发现并修复一处回归：接入控制台路由时误删主服务 `/healthz` 装饰器，已补回并新增路由回归测试，单独重启主服务
+- 验证：
+  - 回归 975 passed / 5 skipped（新增 test_console、test_mailer 及 dream / daily / observability / credentials / nginx / 路由用例）；Playwright UI 6/6
+  - 隔离环境截图检查 390px / 1280px × 明暗，四个视图无横向滚动
+  - 线上：两个 `/healthz` ok；`/internal/console/state` 显示下次整理 02:00、下次报告 08:00、目标为邮件；经 nginx 访问控制台页 / manifest / sw / 图标均为 200，未登录 401，错误密码统一提示，`/internal/console/` 对外 404；测试邮件已发到个人邮箱
+- 影响：`lib/python/app/{console,console_api,mailer,dream,main,config,commands}.py`、`core/agent/pi_cli.py`、`core/session/{daily_scheduler,reminder_scheduler}.py`、`lib/python/observability/{web,security,config,credentials}.py` 与 `static/*`、`bin/server`、`conf/nginx-observability.locations.conf`、`conf/.env.example`、`docs/*`、`AGENTS.md`；`conf/.env`、`conf/.env.observability`、`/etc/nginx/snippets/ferry-observability.conf`（均不入库）
+- 待用户：iOS Safari 打开控制台 → `<配置的用户名>` + 原密码登录 → 分享 →「添加到主屏幕」；明早 08:00 查收第一封 Dream 报告（当晚无对话增量或无变更时不发）
+
+## 2026-10-20 · Dream 离线主动记忆 + 记忆文件改为 NOTE-FORMAT
+
+- 需求：参照 Agent Memory Repo 的 Dreaming 做类 ChatGPT dream 的主动记忆；记忆 markdown 改为 basic-memory NOTE-FORMAT，元数据结构化提取
+- 决策（用户确认）：离线 Dream 为主，对话中仍只在明确要求时写；变更自动生效 + 摘要推送 + `/memory undo`；保留每类别一个文件（每文件一个实体）；条目元数据用时态限定符 `@date` + 行尾 context；单用户不做鉴权；merge 原条目移入已归档；recent 超 90 天由 Python 自动归档
+- 格式：frontmatter（title/type/permalink/category/nature/description）+ `- [key] @YYYY-MM-DD 内容 (source: user|dream 日期|migrated)` + relation + `## 已归档`；`app/memory_format.py` 解析/行级补丁/投影，旧格式与无 key 列表项以 `fact` 兜底；注入块只含有效条目（去 frontmatter、context、归档），每轮刷新 `runtime/server/memory-index.json`
+- Dream：`app/dream.py` 每日 `DREAM_TIME`（默认 03:30，6h 内补跑）或 `/dream`；读聊天会话（wechat / 飞书 `oc_`）watermark 增量 → `PiCliClient.complete()` 一次性调用（无工具/无会话/无 MCP，不走 worker 池与熔断，提示词 `rules/dream.md`）→ JSON ops → Python 校验（evidence 逐字比对用户原话、敏感信息、类别/id/key、单次 30 条）→ 行级补丁 + sha 并发检测 → 单独 `dream:` 提交 → 推送摘要；`/memory` 状态、`/memory undo` git revert 最近一次（冲突自动 abort、不可重复）
+- 配套：`PiCliClient` 新建 session_id 时追加 `pi-session-history.jsonl` 台账；新配置 `DREAM_ENABLED/TIME/NOTIFY/MODEL/TIMEOUT_SECONDS/MAX_TRANSCRIPT_CHARS`；telemetry operation 加 `dream`；写入协议与 `skills/memory/SKILL.md` 改新格式并去掉对话内"80 行合并"（交给 Dream）；迁移工具 `python -m app.memory_migrate`（dry-run diff、LLM 只分配 key、内容守恒校验、标题/注释原位保留、小节日期继承）
+- 验证：回归 923 passed / 5 skipped（新增 44：format / memory / migrate / dream / pi one-shot / 微信命令路由）；迁移 dry-run 6 个文件 diff 审阅通过（未 apply）；临时副本上真实模型跑一次 Dream：4 个 op 全部通过校验、evidence 逐字命中、单独提交，`undo` 回滚到整理前且二次 undo 被拒
+- 影响：`lib/python/app/{memory,memory_format,dream,memory_migrate,commands,config,main}.py`、`core/agent/pi_cli.py`、两渠道 handler、`observability/telemetry.py`、`rules/dream.md`、`skills/memory/SKILL.md`、`conf/.env.example`、`conf/requirements.txt`（显式 pyyaml）、`docs/*`、`memory/README.md`、`AGENTS.md`；`memory/` 实际迁移与服务重启待用户确认
+
+## 2026-10-19 · 回退 PI_MODEL 至 deepseek-v4.1-flash（1017 快照正文夹带思考）
+
+- 需求：用户反馈换新版本模型 id 后微信回复总是夹带思考、且一段回复被分几次输出；先定位再修复
+- 定位：pi 与 Ferry 侧无缺陷——同一轮 assistant message 里 `thinking` block（3332–6971 字）与 `text` block 正常分离，`_extract_text_delta` 只收 `text_delta`、`_extract_final_text` 只取 text block。泄漏源是模型：`deepseek-v4.1-flash-1017` 在长上下文（cacheRead 380k–393k）重分析轮次把**第二遍推理旁白写进 text block**，并把最终答案**重发一次**（同会话 3/3 轮命中；正文均值 3875 字。对照 `deepseek-v4.1-flash` 同会话 63 轮 0 外泄、正文均值 1076 字、最高 378k 上下文）。正文超过 `WECHAT_MESSAGE_CHUNK_CHARS=1800` → 拆 3–4 条连发，即"分几次输出"
+- 提示词方案证伪：上一条记录加的 `rules/system.md` 约束 11:24 落盘、11:30 重启生效，11:35 那轮仍产出 4530 字英文旁白正文并拆 3 条，说明该快照的旁白不受 system prompt 约束
+- 改动：`conf/.env` `PI_MODEL` 回退 `bailian-plan/deepseek-v4.1-flash`；`conf/pi/models.json` 保留 1017 条目但 name 标注「正文夹带思考且重复答案，IM 渠道勿用」；`./bin/server restart`（models.json 已同步至 `~/.pi/agent/`）
+- 验证：走生产真实链路（webhook → 微信 handler → pi worker → sidecar `/send`）在**未清理的污染会话**上完成一轮图片消息——持久化记录 model=`deepseek-v4.1-flash`、thinking 4628 字全部留在思考通道、正文 1206 字直接从结论开始、`chunks=1`（回退前同类轮次 3–4 条）；同时证明历史中 3 轮 1017 旁白不会诱导旧模型模仿，无需 `/new` 重置会话
+- 影响：`conf/.env`（不入库）、`conf/pi/models.json`；飞书/微信双通道同时生效
+- 附：重启窗口内用户 11:51 发的图片消息被中断（in-flight turn 被 kill + sidecar 重试遇 ECONNREFUSED），已用同一 webhook 载荷重放、经 sidecar `/send` 补发成功，即上述验证轮
+
+## 2026-10-19 · 微信通道思考外泄与长回复拆条治理
+
+- 需求：用户反馈微信消息易被拆成多条、有时夹带思考内容；先定位再修复
+- 定位：pi 通道过滤正常（`text_delta`/`thinking_delta` 分离、`_extract_final_text` 只取 text block，879 测试全绿）；根因在模型侧——deepseek-v4.1-flash-1017 在重分析轮次把推理旁白重复写进正文 text block（session 内 3 例：2 例正文以英文 CoT 开头、5.5k 字 → 按默认 1800 字拆 4 条；glm-5.3-prime 10-15 也出过同类）。直连套餐端点（low/medium effort、含污染历史的模仿测试）均不外泄，泄漏仅出现在 pi 真实长上下文（~380k tokens）重分析轮次，间歇性
+- 改动：`rules/system.md` 回复规则新增两条——①正文只写最终回复，思考/草稿/自我旁白不进正文、正文直接从结论开始；②篇幅克制，默认几百字内、深度分析也控制在千字左右（>1800 字会被拆多条连发）。rules 经 `--append-system-prompt` 每轮重读，无需重启
+- 验证：回归 879 passed / 5 skipped；fork 生产会话同 prompt 对照——加规则前正文 4735 字、以"让我重新读…"旁白开头（会被拆 3 条）；加规则后正文 976 字、thinking 4786 字全留在思考通道、无旁白泄漏，单条即发完。已重启 ferry-stack 保证生效
+- 影响：`rules/system.md`；对飞书/微信双通道同时生效
+
+## 2026-10-19 · 移除 iqs-search skills，搜索收口 IQS MCP
+
+- 需求：用户要求移走 iqs-search skills，联网搜索/网页抓取仅保留 IQS MCP 通道
+- 改动：`skills/iqs-search/` 整体移至 `/data/tmp/iqs-search`（保留备份，不入库）；`rules/system.md` 删去「MCP 不可用时回退 iqs-search skills」回退条款，搜索/抓取指引收口为 MCP 工具
+- 验证：回归 879 passed / 5 skipped；`pi mcp list` 双服务 connected；重启后 worker ready
+- 影响：`skills/`（-iqs-search）、`rules/system.md`；pi 每轮注入的 rules 即时生效
+
+## 2026-10-19 · 模型 id 切换为 deepseek-v4.1-flash-1017
+
+- 需求：用户要求换模型 id 为 `deepseek-v4.1-flash-1017`（同 provider 定点版本）
+- 改动：`conf/.env` `PI_MODEL=bailian-plan/deepseek-v4.1-flash-1017`；`conf/pi/models.json` bailian-plan 注册 `deepseek-v4.1-flash-1017`（无 thinkingFormat，openai 默认通道，与 4.1-flash 一致）
+- 验证：套餐端点直连流式 probe 正常返回（reasoning_content 与 content 分离，行为与 4.1-flash 一致）；重启后无 WARN、双 worker ready、回归 879 passed / 5 skipped
+- 影响：`conf/.env`（本地不入库）、`conf/pi/models.json`；重启 `ferry-stack` 生效
+
 ## 2026-10-17 · pi 接入阿里云 IQS MCP 服务（search / readpage）
 
 - 需求：为 pi 配置阿里云 IQS 两个 streamable HTTP MCP 服务，搜索/网页抓取优先走 MCP 而非 iqs-search skills

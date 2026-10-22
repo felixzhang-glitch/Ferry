@@ -17,6 +17,8 @@ runtime/
 runtime/codex-workdir/config/
 .qoder/
 rules/admin.md
+/rules/system.md
+node_modules/
 /memory/*
 !/memory/README.md
 .DS_Store

@@ -3,24 +3,29 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import html
 import json
 import logging
+import os
+import re
 import time
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+import httpx
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from observability.config import ObservabilitySettings, get_observability_settings
 from observability.security import (
-    LoginRateLimiter, SessionStore, constant_token_match, is_loopback, verify_password,
+    LoginRateLimiter, SessionStore, constant_token_match, csrf_token, is_loopback,
+    require_session_csrf, verify_password,
 )
 
 API = "/api/observability/v1"
@@ -28,8 +33,8 @@ MAX_BODY = 4096
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; "
-    "img-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; "
-    "frame-ancestors 'none'; form-action 'self'",
+    "img-src 'self' blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; "
+    "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'",
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": "no-store",
     "Referrer-Policy": "no-referrer",
@@ -132,11 +137,31 @@ class SecurityBoundary:
         if length < 0:
             await reject(400, "请求格式无效")
             return
-        if length > MAX_BODY:
-            await reject(413, "请求体不得超过 4KB")
+        from core.session.chat_contract import MAX_CHAT_JSON_BYTES, MAX_UPLOAD_BYTES
+        path = scope.get("path", "")
+        avatar_upload = scope.get("method") == "PUT" and path == API + "/chat/appearance/avatar"
+        upload = avatar_upload or (scope.get("method") == "PUT" and re.fullmatch(
+            r"/api/observability/v1/chat/threads/[a-f0-9]{32}/attachments/[a-f0-9]{32}/content", path))
+        limit = (2 * 1024 * 1024 if avatar_upload else MAX_UPLOAD_BYTES) if upload else (MAX_CHAT_JSON_BYTES if path.endswith("/turns")
+                                                 and path.startswith(API + "/chat/") else MAX_BODY)
+        if length > limit:
+            await reject(413, "请求体过大" if limit != MAX_BODY else "请求体不得超过 4KB")
             return
         if headers.get(b"content-encoding", b"identity").lower() != b"identity":
             await reject(415, "不支持压缩请求体")
+            return
+        if upload:
+            used = 0
+
+            async def upload_receive():
+                nonlocal used
+                message = await receive()
+                used += len(message.get("body", b""))
+                if used > limit:
+                    raise HTTPException(413, "请求体过大")
+                return message
+
+            await self.app(scope, upload_receive, secured_send)
             return
         body = bytearray()
         while True:
@@ -144,8 +169,8 @@ class SecurityBoundary:
             if message["type"] == "http.disconnect":
                 return
             chunk = message.get("body", b"")
-            if len(body) + len(chunk) > MAX_BODY:
-                await reject(413, "请求体不得超过 4KB")
+            if len(body) + len(chunk) > limit:
+                await reject(413, "请求体过大" if limit != MAX_BODY else "请求体不得超过 4KB")
                 return
             body.extend(chunk)
             if not message.get("more_body", False):
@@ -164,7 +189,45 @@ class SecurityBoundary:
 
 class LoginBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=256)
+
+
+class ConsoleSetting(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    key: str = Field(pattern=r"^[a-z_]{1,64}$")
+    value: bool | Annotated[str, Field(max_length=200)] | Annotated[
+        list[Annotated[str, Field(max_length=200)]], Field(max_length=20)]
+
+
+class ConsoleReset(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    key: str = Field(pattern=r"^[a-z_]{1,64}$")
+
+
+class ConsoleDaily(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    enabled: bool | None = None
+    hour: int | None = Field(None, ge=0, le=23)
+    minute: int | None = Field(None, ge=0, le=59)
+    target: str | None = Field(None, max_length=200)
+
+
+CONSOLE_ID = r"^[A-Za-z0-9_-]{1,64}$"
+STATIC_FILES = {
+    "/static/dashboard.css": ("dashboard.css", "text/css"),
+    "/static/dashboard.js": ("dashboard.js", "text/javascript"),
+    "/static/console.js": ("console.js", "text/javascript"),
+    "/static/chat.js": ("chat.js", "text/javascript"),
+    "/static/appearance.js": ("appearance.js", "text/javascript"),
+    "/static/notifications.js": ("notifications.js", "text/javascript"),
+    "/static/console-icon-180.png": ("console-icon-180.png", "image/png"),
+    "/static/console-icon-192.png": ("console-icon-192.png", "image/png"),
+    "/static/console-icon-512.png": ("console-icon-512.png", "image/png"),
+    "/static/console-icon-maskable.png": ("console-icon-maskable.png", "image/png"),
+    "/observability/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
+    "/observability/sw.js": ("sw.js", "text/javascript"),
+}
 
 
 class SidecarEvent(BaseModel):
@@ -263,7 +326,7 @@ SCHEMA = {
     "schema_version": 1,
     "scope": "当前过滤窗口内已落盘的观测事件；不含聊天正文、工具参数或用户标识",
     "windows": ["1h", "24h", "7d", "30d"],
-    "channels": ["all", "feishu", "wechat", "system"],
+    "channels": ["all", "feishu", "wechat", "web", "system"],
     "unknown": "null 或缺失表示未观测/不可用，0 表示观测计数为零；unknown 不是成功",
     "caveats": ["底层 HTTP 请求次数未验证，attempts/model_responses 不可代替它",
                 "缓存命中、cache read/write 及缓存计费语义未验证", "费用未验证，不根据 token 估算金额",
@@ -305,15 +368,32 @@ SCHEMA = {
     "runtime": {"scope": "最新主服务快照，不随窗口/渠道/模型筛选；不是 Web 进程健康",
                 "timestamp/started_at": "Unix 秒或 null", "mode": "主服务上报的运行方式",
                 "gauges": "主服务上报的当前数值；缺失不能当零，旧快照不能当实时状态"},
-    "authentication": "只读 Bearer Token 或登录 Cookie；写入需独立 ingest Token 且实际来源为 loopback",
+    "authentication": "只读 Bearer Token 或登录 Cookie；上报需独立 ingest Token 且实际来源为 loopback；控制台写操作需登录 Cookie + 会话 CSRF 与来源校验，经 console Token 转发到主服务的回环接口",
 }
 
 
 def create_app(settings: ObservabilitySettings | None = None) -> FastAPI:
     settings = settings if settings is not None else get_observability_settings()
-    sessions = SessionStore(settings.session_ttl_seconds)
+    session_file = os.path.join(settings.store_dir, "console-sessions.json") if settings.enabled else None
+    sessions = SessionStore(settings.session_ttl_seconds, persist_path=session_file)
     limiter = LoginRateLimiter()
     password_lock = asyncio.Lock()  # Bound simultaneous scrypt memory/CPU work.
+
+    def default_brand():
+        return {"name": "Ferry", "revision": "default", "avatar": False,
+                "icons": {key: f"/static/console-icon-{key}.png" for key in ("180", "192", "512", "maskable")}}
+
+    def appearance_store():
+        if application.state.appearance is None:
+            raise HTTPException(503, "App 外观设置暂不可用")
+        return application.state.appearance
+
+    async def public_brand():
+        from observability.appearance import AppearanceError
+        try:
+            return await asyncio.to_thread(appearance_store().public)
+        except (AppearanceError, HTTPException):
+            return default_brand()
 
     @asynccontextmanager
     async def lifespan(application):
@@ -321,6 +401,11 @@ def create_app(settings: ObservabilitySettings | None = None) -> FastAPI:
         usage_ledger = None
         try:
             if settings.enabled:
+                from observability.appearance import AppearanceStore
+                try:
+                    application.state.appearance = await asyncio.to_thread(AppearanceStore, Path(settings.store_dir) / "appearance")
+                except Exception:
+                    logging.getLogger(__name__).warning("app appearance unavailable")
                 application.state.reader = await asyncio.to_thread(_create_reader, settings)
                 if settings.ingest_token:
                     collector = await asyncio.to_thread(_create_collector, settings)
@@ -337,6 +422,7 @@ def create_app(settings: ObservabilitySettings | None = None) -> FastAPI:
         finally:
             application.state.collector = None
             application.state.reader = None
+            application.state.appearance = None
             sessions.clear()
             pending = application.state.usage_refresh_task
             if pending is not None and not pending.done():
@@ -354,6 +440,7 @@ def create_app(settings: ObservabilitySettings | None = None) -> FastAPI:
                           openapi_url=None, lifespan=lifespan)
     application.add_middleware(SecurityBoundary)
     application.state.reader = None
+    application.state.appearance = None
     application.state.collector = None
     application.state.sessions = sessions
     application.state.login_limiter = limiter
@@ -361,6 +448,8 @@ def create_app(settings: ObservabilitySettings | None = None) -> FastAPI:
     application.state.usage_refresh_task = None
     application.state.usage_refresh_at = float("-inf")
     application.state.usage_refresh_failed = False
+    application.state.console_client = lambda: httpx.AsyncClient(timeout=8.0)
+    application.state.chat_client = lambda: httpx.AsyncClient(timeout=httpx.Timeout(700.0, connect=5.0))
 
     @application.exception_handler(RequestValidationError)
     async def invalid_request(request, exc):
@@ -400,10 +489,13 @@ def create_app(settings: ObservabilitySettings | None = None) -> FastAPI:
         if not limiter.allow(ip):
             raise HTTPException(429, "登录尝试过于频繁，请稍后重试", headers={"Retry-After": "60"})
         data = await _body(request, LoginBody)
+        username_ok = constant_token_match(data.username, settings.username)
+        # scrypt always runs, so a wrong username is not distinguishable by timing.
         async with password_lock:
             verified = await asyncio.to_thread(verify_password, data.password, settings.password_hash)
-        if not verified:
-            raise HTTPException(401, "密码无效")
+        if not (username_ok and verified):
+            raise HTTPException(401, "用户名或密码无效")
+        await cancel_chat_cookie(request.cookies.get("obs_session"))
         sessions.delete(request.cookies.get("obs_session"))
         session_id = sessions.create()
         response = JSONResponse({"authenticated": True})
@@ -418,19 +510,119 @@ def create_app(settings: ObservabilitySettings | None = None) -> FastAPI:
         # cookie itself (and deletes only that cookie's server-side record).
         if not sessions.valid(request.cookies.get("obs_session")):
             raise HTTPException(401, "需要身份验证")
+        await cancel_chat_cookie(request.cookies.get("obs_session"))
         sessions.delete(request.cookies.get("obs_session"))
         response = JSONResponse({"authenticated": False})
         response.delete_cookie("obs_session", path="/", httponly=True,
                                secure=settings.cookie_secure, samesite="strict")
         return response
 
+    @application.get("/internal/observability/push-owner")
+    async def push_owner(request: Request, owner: str = Query(pattern=r"^[a-f0-9]{64}$")):
+        values = request.headers.getlist("authorization")
+        expected = f"Bearer {settings.chat_token}" if settings.chat_token else ""
+        if (not request.client or not is_loopback(request.client.host) or not expected
+                or len(values) != 1 or not constant_token_match(values[0], expected)):
+            raise HTTPException(401, "需要身份验证")
+        enabled()
+        return {"valid": sessions.valid_digest(owner)}
+
     @application.get(API + "/session", dependencies=[Depends(require_read)])
-    async def session():
-        return {"authenticated": True, "read_only": True}
+    async def session(request: Request):
+        cookie = request.cookies.get("obs_session", "")
+        cookie_auth = not request.headers.getlist("authorization") and sessions.valid(cookie)
+        console = bool(settings.console_token) and cookie_auth
+        chat = bool(settings.chat_token) and cookie_auth
+        result = {"authenticated": True, "read_only": not console, "username": settings.username,
+                  "console": console, "chat": chat}
+        if console:
+            result["console_csrf_token"] = csrf_token(settings.console_token, cookie, purpose="console")
+        if chat:
+            result["chat_csrf_token"] = csrf_token(settings.chat_token, cookie)
+            result["user_display_name"] = settings.user_display_name
+        return result
+
+    from observability.chat import build_router as build_chat_router
+    chat_router, cancel_chat_cookie = build_chat_router(
+        settings, sessions, enabled, _check_origin, lambda: application.state.chat_client(), appearance_store)
+    application.include_router(chat_router)
+
+    def require_console(request: Request):
+        # Console calls need the login cookie itself; the read token never writes.
+        if request.headers.getlist("authorization") or not sessions.valid(request.cookies.get("obs_session")):
+            raise HTTPException(401, "需要身份验证")
+        enabled()
+        if not settings.console_token:
+            raise HTTPException(503, "控制台未配置")
+        if request.method not in ("GET", "HEAD"):
+            require_session_csrf(request, settings.console_token, purpose="console",
+                                 check_origin=lambda: _check_origin(request, settings),
+                                 logger=logging.getLogger(__name__))
+
+    async def forward(method: str, path: str, payload: dict | None = None):
+        url = settings.console_upstream.rstrip("/") + "/internal/console" + path
+        headers = {"Authorization": f"Bearer {settings.console_token}"}
+        try:
+            async with application.state.console_client() as client:
+                response = await client.request(method, url, json=payload, headers=headers)
+        except httpx.HTTPError:
+            raise HTTPException(503, "主服务不可达，稍后重试") from None
+        if len(response.content) > 1_000_000:
+            raise HTTPException(502, "主服务响应过大")
+        try:
+            data = response.json()
+        except ValueError:
+            raise HTTPException(502, "主服务响应无效") from None
+        if response.status_code in (200, 422) and isinstance(data, dict):
+            return JSONResponse(data, status_code=response.status_code)
+        if response.status_code == 503:
+            raise HTTPException(503, "主服务未启用控制台")
+        raise HTTPException(502, "主服务拒绝了请求")
+
+    def _console_id(value: str) -> str:
+        import re
+        if not re.fullmatch(CONSOLE_ID, value):
+            raise HTTPException(422, "请求参数无效")
+        return value
+
+    @application.get(API + "/console/state", dependencies=[Depends(require_console)])
+    async def console_state():
+        return await forward("GET", "/state")
+
+    @application.post(API + "/console/settings", dependencies=[Depends(require_console)])
+    async def console_setting(request: Request):
+        data = await _body(request, ConsoleSetting)
+        return await forward("POST", "/settings", data.model_dump())
+
+    @application.post(API + "/console/settings/reset", dependencies=[Depends(require_console)])
+    async def console_reset(request: Request):
+        data = await _body(request, ConsoleReset)
+        return await forward("POST", "/settings/reset", data.model_dump())
+
+    @application.post(API + "/console/dream/run", dependencies=[Depends(require_console)])
+    async def console_dream_run(request: Request):
+        return await forward("POST", "/dream/run")
+
+    @application.post(API + "/console/dream/undo", dependencies=[Depends(require_console)])
+    async def console_dream_undo(request: Request):
+        return await forward("POST", "/dream/undo")
+
+    @application.post(API + "/console/daily/{task_id}", dependencies=[Depends(require_console)])
+    async def console_daily_update(task_id: str, request: Request):
+        data = await _body(request, ConsoleDaily)
+        return await forward("POST", f"/daily/{_console_id(task_id)}", data.model_dump(exclude_none=True))
+
+    @application.delete(API + "/console/daily/{task_id}", dependencies=[Depends(require_console)])
+    async def console_daily_delete(task_id: str, request: Request):
+        return await forward("DELETE", f"/daily/{_console_id(task_id)}")
+
+    @application.delete(API + "/console/reminders/{reminder_id}", dependencies=[Depends(require_console)])
+    async def console_reminder_cancel(reminder_id: str, request: Request):
+        return await forward("DELETE", f"/reminders/{_console_id(reminder_id)}")
 
     async def query_data(
         window: Literal["1h", "24h", "7d", "30d"] = "24h",
-        channel: Literal["all", "feishu", "wechat", "system"] = "all",
+        channel: Literal["all", "feishu", "wechat", "web", "system"] = "all",
         model: str = Query("all", min_length=1, max_length=96),
     ):
         reader = application.state.reader
@@ -553,19 +745,66 @@ def create_app(settings: ObservabilitySettings | None = None) -> FastAPI:
     async def healthz():
         return {"status": "ok"}
 
+    @application.get("/observability/", include_in_schema=False)
     @application.get("/observability", include_in_schema=False)
     @application.get("/", include_in_schema=False)
     async def dashboard():
-        return FileResponse(STATIC_DIR / "dashboard.html", media_type="text/html")
+        brand = await public_brand()
+        page = await asyncio.to_thread((STATIC_DIR / "dashboard.html").read_text, encoding="utf-8")
+        name = html.escape(brand["name"], quote=True)
+        page = re.sub(r'(<title>)[^<]*(</title>)', lambda match: match[1] + name + " 个人助手" + match[2], page)
+        page = re.sub(r'(<meta name="apple-mobile-web-app-title" content=")[^"]*(")', lambda match: match[1] + name + match[2], page)
+        for key, value in {"name": brand["name"], "revision": brand["revision"], "avatar": str(brand["avatar"]).lower(),
+                           **{f"icon-{key}": value for key, value in brand["icons"].items()}}.items():
+            pattern = rf'(data-app-{re.escape(key)}=")[^"]*(")'
+            page = re.sub(pattern, lambda match, value=value: match[1] + html.escape(value, quote=True) + match[2], page)
+        for key, url in brand["icons"].items():
+            page = page.replace(f'/static/console-icon-{key}.png"', html.escape(url, quote=True) + '"')
+        page = page.replace('<span class="brand-name">Ferry</span>', '<span class="brand-name">' + name + '</span>')
+        page = re.sub(r'(<h1 id="login-title">)[^<]*(</h1>)', lambda match: match[1] + name + " 个人助手" + match[2], page)
+        return HTMLResponse(page)
+
+    @application.get(API + "/brand")
+    async def brand():
+        return await public_brand()
+
+    @application.get("/observability/manifest.webmanifest", include_in_schema=False)
+    async def manifest():
+        brand = await public_brand()
+        template = json.loads(await asyncio.to_thread((STATIC_DIR / "manifest.webmanifest").read_text, encoding="utf-8"))
+        template.update(name=brand["name"], short_name=brand["name"], description=f"{brand['name']} 个人助手、用量与记忆管理")
+        for icon in template["icons"]:
+            key = "maskable" if icon.get("purpose") == "maskable" else icon["sizes"].split("x")[0]
+            icon["src"] = brand["icons"][key]
+        return JSONResponse(template, media_type="application/manifest+json")
 
     # Explicit files only: no StaticFiles mount, path parameter or arbitrary file API.
-    @application.get("/static/dashboard.css", include_in_schema=False)
-    async def stylesheet():
-        return FileResponse(STATIC_DIR / "dashboard.css", media_type="text/css")
+    def _static_route(path: str, filename: str, media_type: str):
+        if filename.startswith("console-icon-"):
+            key = filename.removeprefix("console-icon-").removesuffix(".png")
 
-    @application.get("/static/dashboard.js", include_in_schema=False)
-    async def script():
-        return FileResponse(STATIC_DIR / "dashboard.js", media_type="text/javascript")
+            async def serve_icon(v: str | None = Query(None, max_length=64)):
+                from observability.appearance import AppearanceError
+                try:
+                    selected = await asyncio.to_thread(appearance_store().icon_path, key, v)
+                except HTTPException:
+                    selected = None
+                except AppearanceError as exc:
+                    if v or exc.status == 422:
+                        raise HTTPException(exc.status, "图标版本不存在或不可用") from None
+                    selected = None
+                return FileResponse(selected or STATIC_DIR / filename, media_type="image/png")
+
+            application.add_api_route(path, serve_icon, methods=["GET"], include_in_schema=False)
+            return
+
+        async def serve():
+            return FileResponse(STATIC_DIR / filename, media_type=media_type)
+        application.add_api_route(path, serve, methods=["GET"], include_in_schema=False)
+
+    for route_path, (filename, media_type) in STATIC_FILES.items():
+        if filename != "manifest.webmanifest":
+            _static_route(route_path, filename, media_type)
 
     return application
 

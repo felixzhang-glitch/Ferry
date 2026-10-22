@@ -1,9 +1,12 @@
 """Configuration for the standalone observability process (no main-app imports)."""
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+MAX_SESSION_TTL = 30 * 86400
 
 
 class ObservabilitySettings(BaseSettings):
@@ -24,7 +27,15 @@ class ObservabilitySettings(BaseSettings):
     ingest_token: str = Field("", alias="OBSERVABILITY_INGEST_TOKEN", repr=False, max_length=512)
     hmac_key: str = Field("", alias="OBSERVABILITY_HMAC_KEY", repr=False)
     cookie_secure: bool = Field(False, alias="OBSERVABILITY_COOKIE_SECURE")
-    session_ttl_seconds: int = Field(86400, alias="OBSERVABILITY_SESSION_TTL_SECONDS", ge=1, le=86400)
+    session_ttl_seconds: int = Field(86400, alias="OBSERVABILITY_SESSION_TTL_SECONDS", ge=1, le=MAX_SESSION_TTL)
+    username: str = Field("admin", alias="OBSERVABILITY_USERNAME", min_length=1, max_length=64)
+    user_display_name: str = Field("我", alias="OBSERVABILITY_USER_DISPLAY_NAME", min_length=1, max_length=32)
+
+    # Console writes are proxied to the main service's loopback-only API.
+    console_token: str = Field("", alias="OBSERVABILITY_CONSOLE_TOKEN", repr=False, max_length=512)
+    console_upstream: str = Field("http://127.0.0.1:8080", alias="OBSERVABILITY_CONSOLE_UPSTREAM", max_length=200)
+    chat_token: str = Field("", alias="OBSERVABILITY_CHAT_TOKEN", repr=False, max_length=512)
+    chat_upstream: str = Field("http://127.0.0.1:8080", alias="OBSERVABILITY_CHAT_UPSTREAM", max_length=200)
 
     # Native pi usage is a separate, non-expiring ledger, not the event journal.
     pi_usage_enabled: bool = Field(False, alias="OBSERVABILITY_PI_USAGE_ENABLED")
@@ -41,10 +52,22 @@ class ObservabilitySettings(BaseSettings):
 
     @model_validator(mode="after")
     def separate_tokens(self):
+        if not self.user_display_name.strip():
+            raise ValueError("User display name cannot be blank")
         if any(not value.strip() for value in self.pi_session_dirs):
             raise ValueError("Pi source directories cannot contain empty paths")
         if self.read_token and self.read_token == self.ingest_token:
             raise ValueError("Read and ingest credentials must be independent")
+        if self.console_token and self.console_token in (self.read_token, self.ingest_token):
+            raise ValueError("Console credential must be independent")
+        if self.chat_token and self.chat_token in (self.read_token, self.ingest_token, self.console_token):
+            raise ValueError("Chat credential must be independent")
+        for label, value in (("Console", self.console_upstream), ("Chat", self.chat_upstream)):
+            upstream = urlsplit(value)
+            if (upstream.scheme != "http" or upstream.hostname not in ("127.0.0.1", "localhost", "::1")
+                    or upstream.username or upstream.password or upstream.query or upstream.fragment
+                    or upstream.path not in ("", "/")):
+                raise ValueError(f"{label} upstream must be a loopback http URL")
         return self
 
 

@@ -1,18 +1,21 @@
 """Long-term memory workspace.
 
-Memory lives as markdown files under `MEMORY_DIR`, one file per category
-declared in `MEMORY_CATEGORIES`. Writes are triggered only by an explicit
-natural-language request from the user and are performed by the agent itself
-following `skills/memory/SKILL.md` -- this module never writes memory content.
+Memory lives as NOTE-FORMAT markdown files under `MEMORY_DIR`, one file per
+category declared in `MEMORY_CATEGORIES` (format: `app.memory_format`). In
+conversation, writes happen only on an explicit user request and are done by
+the agent following `skills/memory/SKILL.md`; offline consolidation is done by
+`app.dream`, which validates and applies its own edits.
 
-It does two things:
+This module:
 
 1. Renders the block that gets injected into every turn (write protocol +
-   resident categories + an index of the on-demand ones). The protocol has to
-   be resident in pi's system prompt on every turn, rather than relying on a
-   first-turn preamble that can disappear during native context compaction.
+   resident categories + an index of the on-demand ones) from the parsed
+   files, plus a JSON projection of all metadata (`memory-index.json`). The
+   protocol has to be resident in pi's system prompt on every turn, rather
+   than relying on a first-turn preamble that can disappear during native
+   context compaction.
 2. Keeps `MEMORY_DIR` under a local-only git repo (no remote) so a mistaken
-   agent write stays reviewable and revertible. The git dir lives outside the
+   write stays reviewable and revertible. The git dir lives outside the
    worktree (`MEMORY_GIT_DIR`, under runtime/): an embedded `memory/.git`
    would make git treat memory/ as a nested-repo boundary and silently refuse
    to track `memory/README.md` in the main repo.
@@ -20,13 +23,16 @@ It does two things:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import subprocess
 import time
 
+from app import memory_format
 from app.config import Settings, get_settings
+from app.memory_format import MemoryNote
 
 logger = logging.getLogger(__name__)
 
@@ -55,24 +61,34 @@ _CATEGORY_HINTS = {
     "social": "人际关系：家人、朋友、同事的相关信息。",
 }
 
+# Write semantics hint for the agent and Dream: timeseries keeps history, state overwrites.
+_CATEGORY_NATURE = {
+    "basic": "state",
+    "health": "timeseries",
+    "preference": "state",
+    "work": "state",
+    "finance": "timeseries",
+    "recent": "timeseries",
+    "social": "state",
+}
+
 _PROTOCOL = """## 记忆写入协议
 
-你拥有长期记忆，存放在项目根的 `memory/` 目录（每个类别一个 markdown 文件）。
+你拥有长期记忆，存放在项目根的 `memory/` 目录（每个类别一个 NOTE-FORMAT markdown 文件）。
 
 触发条件（严格遵守）：
 - 只有用户明确表达记忆意图时才写入，例如"记住/记一下/存下来/以后都/别忘了"。
-- 日常对话中顺带提到的事实，一律不要主动记录。
+- 日常对话中顺带提到的事实不要主动记录，离线的 Dream 会定期从对话里整理长期记忆。
 - 用户要求查看、修改、删除记忆时，同样直接操作这些文件。
 
 硬约束：
-- 只能写下面列出的类别文件，禁止新建其他记忆文件。
+- 只能写下面列出的类别文件，禁止新建其他记忆文件；不要改动文件开头 `---` 之间的 frontmatter。
 - 禁止修改 `rules/system.md` 与 `rules/admin.md`，那是人工维护的权威设定。
 - 写入前先读目标文件，判断是新增条目还是更新已有条目。
-- 时序事实（体重、仓位、近况）追加带日期的新条目，保留历史趋势；状态事实（住址、设备、口味偏好）原地覆盖旧值。
-- 条目格式 `- [YYYY-MM-DD] 内容`，日期用本轮注入的当前时间。
-- 删除采用软删除：移到该文件末尾的 `## 已归档` 小节，不要物理删除。
+- 条目格式 `- [key] @YYYY-MM-DD 内容 (source: user)`：key 是小写英文短词（如 weight、city、coffee），同一主题沿用已有 key；日期用本轮注入的当前时间；内容里不要用半角括号。
+- 时序事实（体重、仓位、近况）追加带日期的新条目，保留历史趋势；状态事实（住址、设备、口味偏好）原地覆盖旧条目。
+- 删除采用软删除：把条目移到文件末尾的 `## 已归档` 小节，并在行尾括号里追加 `; archived: YYYY-MM-DD`，不要物理删除。
 - 写入后必须在回复里回执：`已记入 memory/<类别>.md：<条目原文>`。
-- 单个类别超过 80 行时，主动合并同类项或归档过期条目。
 
 完整操作规范见 `skills/memory/SKILL.md`，需要细节时自行读取。"""
 
@@ -103,6 +119,23 @@ def category_path(category: str, settings: Settings | None = None) -> str:
 
 def label(category: str) -> str:
     return _CATEGORY_LABELS.get(category, category)
+
+
+def nature(category: str) -> str:
+    return _CATEGORY_NATURE.get(category, "state")
+
+
+def hint(category: str) -> str:
+    return _CATEGORY_HINTS.get(category, "由 Ferry 在用户明确要求或 Dream 整理时写入。")
+
+
+def categories(settings: Settings | None = None) -> list[str]:
+    return _categories(_settings_or_default(settings))
+
+
+def index_path(settings: Settings | None = None) -> str:
+    settings = _settings_or_default(settings)
+    return os.path.join(os.path.dirname(_resolve(settings.memory_context_path)), "memory-index.json")
 
 
 def _categories(settings: Settings) -> list[str]:
@@ -139,42 +172,55 @@ def _resident(settings: Settings, categories: list[str]) -> list[str]:
 def _read_category(category: str, settings: Settings) -> str:
     try:
         with open(category_path(category, settings), encoding="utf-8") as fh:
-            return fh.read().strip()
+            return fh.read()
     except OSError:
         return ""
 
 
-def _count_entries(text: str) -> int:
-    return sum(1 for line in text.splitlines() if line.lstrip().startswith("- "))
+def read_text(category: str, settings: Settings | None = None) -> str:
+    return _read_category(category, _settings_or_default(settings))
+
+
+def load_notes(settings: Settings | None = None) -> dict[str, MemoryNote]:
+    """Parse every declared category; a missing file parses as an empty note."""
+    settings = _settings_or_default(settings)
+    return {name: memory_format.parse_note(_read_category(name, settings)) for name in _categories(settings)}
 
 
 def _skeleton(category: str) -> str:
-    hint = _CATEGORY_HINTS.get(category, "由 Ferry 在用户明确要求时写入。")
-    return f"# {label(category)}\n\n<!-- {hint} 条目格式: - [YYYY-MM-DD] 内容 -->\n"
+    return memory_format.skeleton(
+        category=category, title=label(category), nature=nature(category), description=hint(category)
+    )
 
 
 def _is_skeleton(text: str) -> bool:
-    """A file holding only its heading and hint carries no real memory yet."""
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or stripped.startswith("<!--"):
-            continue
-        return False
-    return True
+    """A file without observations or relations carries no real memory yet."""
+    note = memory_format.parse_note(text)
+    return not note.active and not note.relations
 
 
-def _strip_meta(text: str) -> str:
-    """Drop the file's own title and hint comments; the block adds its own header."""
-    kept: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("# ") or stripped.startswith("<!--"):
-            continue
-        kept.append(line)
-    return "\n".join(kept).strip()
+def _render_section(name: str, note: MemoryNote) -> str:
+    lines = [memory_format.inject_line(obs) for obs in note.active]
+    lines.extend(f"- {rel.raw}" for rel in note.relations)
+    return f"### {label(name)}（{name}）\n" + "\n".join(lines)
 
 
-def render_memory_block(settings: Settings | None = None) -> str:
+def build_index(settings: Settings | None = None, notes: dict[str, MemoryNote] | None = None) -> dict:
+    """JSON projection of every category: frontmatter, observations, counts, lint."""
+    settings = _settings_or_default(settings)
+    notes = notes if notes is not None else load_notes(settings)
+    resident = set(_resident(settings, list(notes)))
+    view: dict[str, dict] = {}
+    for name, note in notes.items():
+        entry = memory_format.project_note(name, note)
+        entry.update(label=label(name), path=category_path(name, settings), resident=name in resident)
+        view[name] = entry
+    return {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "categories": view}
+
+
+def render_memory_block(
+    settings: Settings | None = None, notes: dict[str, MemoryNote] | None = None
+) -> str:
     """Build the memory block injected into every turn.
 
     `MEMORY_MAX_INJECT_CHARS` bounds the memory content, not the fixed write
@@ -189,6 +235,8 @@ def render_memory_block(settings: Settings | None = None) -> str:
     categories = _categories(settings)
     if not categories:
         return ""
+    if notes is None:
+        notes = load_notes(settings)
 
     resident = _resident(settings, categories)
     limit = max(500, settings.memory_max_inject_chars)
@@ -196,21 +244,20 @@ def render_memory_block(settings: Settings | None = None) -> str:
     resident_sections: list[str] = []
     empty_resident: list[str] = []
     for name in resident:
-        content = _read_category(name, settings)
-        if not content or _is_skeleton(content):
+        note = notes.get(name) or memory_format.parse_note("")
+        if not note.active and not note.relations:
             # Still advertise it, otherwise the agent cannot know it may write here.
             empty_resident.append(name)
             continue
-        resident_sections.append(f"### {label(name)}（{name}）\n{_strip_meta(content)}")
+        resident_sections.append(_render_section(name, note))
 
     index_lines: list[str] = []
     for name in categories:
         if name in resident:
             continue
-        content = _read_category(name, settings)
+        count = len(notes[name].active) if name in notes else 0
         index_lines.append(
-            f"- {label(name)}（{name}）: {category_path(name, settings)}"
-            f"（{_count_entries(content)} 条）"
+            f"- {label(name)}（{name}）: {category_path(name, settings)}（{count} 条）"
         )
 
     if not resident_sections and not index_lines and not empty_resident:
@@ -262,11 +309,27 @@ def render_memory_block(settings: Settings | None = None) -> str:
     return "\n\n".join(parts)
 
 
+def _atomic_write(target: str, text: str) -> bool:
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        tmp_path = f"{target}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp_path, target)
+    except OSError:
+        return False
+    return True
+
+
+def write_category(category: str, text: str, settings: Settings | None = None) -> bool:
+    return _atomic_write(category_path(category, _settings_or_default(settings)), text)
+
+
 def write_context_file(settings: Settings | None = None) -> str | None:
     """Render the memory block to disk and return its path for injection.
 
     Commits any pending agent writes first, so each turn also snapshots the
-    previous turn's changes.
+    previous turn's changes. The metadata projection is refreshed alongside.
     """
     settings = _settings_or_default(settings)
     if not settings.memory_enabled:
@@ -274,18 +337,21 @@ def write_context_file(settings: Settings | None = None) -> str | None:
 
     auto_commit(settings)
 
-    block = render_memory_block(settings)
+    notes = load_notes(settings)
+    index_target = index_path(settings)
+    index_text = json.dumps(build_index(settings, notes), ensure_ascii=False, indent=2)
+    if not _atomic_write(index_target, f"{index_text}\n"):
+        logger.warning(
+            "failed to write memory index file",
+            extra={"event": "memory.index_write", "path": index_target},
+        )
+
+    block = render_memory_block(settings, notes)
     if not block:
         return None
 
     target = _resolve(settings.memory_context_path)
-    try:
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        tmp_path = f"{target}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            fh.write(f"{block}\n")
-        os.replace(tmp_path, target)
-    except OSError:
+    if not _atomic_write(target, f"{block}\n"):
         logger.warning(
             "failed to write memory context file",
             extra={"event": "memory.context_write", "path": target},
@@ -303,29 +369,41 @@ def _run_git(directory: str, git_dir: str, *args: str) -> subprocess.CompletedPr
     )
 
 
-def auto_commit(settings: Settings | None = None) -> None:
-    """Snapshot pending memory changes into the local-only git repo.
+def git_available(settings: Settings | None = None) -> bool:
+    return os.path.isdir(_git_dir(_settings_or_default(settings)))
 
-    Never raises: a broken git setup must not take the conversation down.
+
+def head(settings: Settings | None = None) -> str | None:
+    settings = _settings_or_default(settings)
+    if not git_available(settings):
+        return None
+    try:
+        result = _run_git(memory_dir(settings), _git_dir(settings), "rev-parse", "HEAD")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+
+
+def commit(settings: Settings | None, message: str) -> str | None:
+    """Commit every pending change under memory/ and return the new HEAD.
+
+    Returns None when nothing changed or git is unusable. Never raises: a
+    broken git setup must not take the conversation down.
     """
     settings = _settings_or_default(settings)
-    if not settings.memory_git_auto_commit:
-        return
-
     directory = memory_dir(settings)
     git_dir = _git_dir(settings)
     if not os.path.isdir(git_dir):
-        return
+        return None
 
     try:
         status = _run_git(directory, git_dir, "status", "--porcelain")
         if status.returncode != 0 or not status.stdout.strip():
-            return
-        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            return None
         added = _run_git(directory, git_dir, "add", "-A")
         if added.returncode != 0:
             raise RuntimeError(added.stderr.strip())
-        committed = _run_git(directory, git_dir, "commit", "-m", f"memory: auto snapshot {stamp}")
+        committed = _run_git(directory, git_dir, "commit", "-m", message)
         if committed.returncode != 0:
             raise RuntimeError(committed.stderr.strip() or committed.stdout.strip())
         logger.info(
@@ -334,9 +412,36 @@ def auto_commit(settings: Settings | None = None) -> None:
         )
     except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
         logger.warning(
-            "memory git auto commit failed",
+            "memory git commit failed",
             extra={"event": "memory.git_commit", "error": str(exc)},
         )
+        return None
+    return head(settings)
+
+
+def revert(settings: Settings | None, sha: str) -> tuple[bool, str]:
+    """Revert one memory commit; on conflict abort and leave the tree untouched."""
+    settings = _settings_or_default(settings)
+    directory = memory_dir(settings)
+    git_dir = _git_dir(settings)
+    if not os.path.isdir(git_dir):
+        return False, "未启用记忆快照仓"
+    try:
+        result = _run_git(directory, git_dir, "revert", "--no-edit", sha)
+        if result.returncode == 0:
+            return True, head(settings) or ""
+        _run_git(directory, git_dir, "revert", "--abort")
+        return False, (result.stderr.strip() or result.stdout.strip())[:300]
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+
+
+def auto_commit(settings: Settings | None = None) -> None:
+    """Snapshot pending memory changes into the local-only git repo."""
+    settings = _settings_or_default(settings)
+    if not settings.memory_git_auto_commit:
+        return
+    commit(settings, f"memory: auto snapshot {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
 
 def _ensure_git_repo(directory: str, settings: Settings) -> None:

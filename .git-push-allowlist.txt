@@ -4,6 +4,7 @@
 #
 # memory/README.md 只是记忆目录的说明文件，无隐私数据，刻意随仓库分发（.gitignore 里 !/memory/README.md）
 path:memory/README.md
+extra:rules/system.md
 
 # skills/zhihu/references/http-api.md 里有一个 11 位的知乎 ContentID（文章 ID，同值也出现在
 # zhuanlan.zhihu.com/p/<ContentID> 链接中）被规则误判为手机号；该目录第三方托管、升级会覆盖，故不改文件

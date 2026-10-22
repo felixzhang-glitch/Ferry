@@ -5,7 +5,7 @@
 - pytest 单元 / 链路测试为主，pi JSONL 与飞书 / 微信 API 使用 mock；进程取消另用本地 Python 子进程验证；真实链路单独手动冒烟
 - 运行：项目根执行 `pytest -c conf/pytest.ini -q`，或 `cd conf && pytest -q`
 - Node sidecar：项目根执行 `node --test tests/wechat-sidecar.test.mjs`
-- pi-worker SDK：需 Node >= 22.19，`/root/.nvm/versions/node/v22.23.2/bin/node --test tests/pi-worker.test.mjs`（pi 1.2.0 要求）
+- pi-worker SDK：需 Node >= 22.19，`node --test tests/pi-worker.test.mjs`（pi 1.2.0 要求）
 - `tests/` 为本地目录，不随仓库分发（已 `git rm --cached` + `.gitignore`）：下文的文件映射只对本地工作副本有效，clone 仓库拿不到这些测试
 - 以下是回归目标和文件映射；本次执行记录见 [需求变更记录](requirement-changes.md)。真实模型和渠道实发需单独冒烟，不能由 mock 测试替代
 
@@ -38,6 +38,14 @@
 | 会话 / 状态 / 旧命令兼容 | `tests/test_new_command.py`、`tests/test_wechat_handler.py` | 单元 |
 | 每日任务与提醒恢复 | `tests/test_daily_scheduler.py`、`tests/test_reminder_scheduler.py` | 单元 |
 | 长期记忆注入 | `tests/test_memory.py` | 单元 |
+| 记忆 NOTE-FORMAT 解析、行级补丁与迁移 | `tests/test_memory_format.py`、`tests/test_memory_migrate.py` | 单元 |
+| PWA 聊天 store/service/API/安全与界面 | `tests/test_web_chat_store.py`、`tests/test_web_chat_service.py`、`tests/test_web_chat_foundations.py`、`tests/test_observability_chat.py`、`tests/test_web_chat_ui.py` | 单元 + 隔离浏览器 |
+| PWA 通知/定时结果 | `tests/test_web_push.py`、`tests/test_observability_chat.py`；覆盖端点与密钥校验、注销/过期、订阅更新竞态、队列重试/去重、前台抑制、定时投送恢复 | 单元 + HTTP；真实系统通知需设备验收 |
+| 全渠道共享模型及最终正文 | `tests/test_console.py`、`tests/test_web_chat_service.py`、`tests/test_pi_session.py`、`tests/test_pi_worker.py`；PWA/飞书/微信下一轮跟随设置，当前轮与重试参数固定，显式覆盖不污染默认，最终空正文/工具前正文/重试回调 | 单元 + 隔离 HTTP/浏览器；真实模型另做授权冒烟 |
+| Dream 整理、校验、undo、调度、报告定时、按对话整理（`/dream` / `/dream all`、对话 watermark）、`/new` 台账与 pi 一次性调用 | `tests/test_dream.py`、`tests/test_wechat_handler.py` | 单元 |
+| 控制台白名单配置与内部接口 | `tests/test_console.py`、`tests/test_daily_scheduler.py` | 单元 / 路由 |
+| 邮件渠道 | `tests/test_mailer.py` | 单元 |
+| 控制台登录、会话持久化、转发与 PWA | `tests/test_observability_web.py`、`tests/test_observability_chat.py`、`tests/test_observability_credentials.py`、`tests/test_observability_nginx.py`；七个写接口的 Cookie/用途隔离 CSRF、移动缺失/null 来源、跨站/重复头/跨会话拒绝 | 单元 / 路由 + 隔离 HTTP |
 | pi 调用、原生会话与错误语义 | `tests/test_pi_session.py`、`tests/test_pi_chain.py` | 单元 |
 | 时间注入与相对日期 | `tests/test_clock.py`、`tests/test_pi_session.py` | 单元 |
 | skills 发现与摘要 | `tests/test_skills.py` | 单元 |

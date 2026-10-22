@@ -1,222 +1,179 @@
 # Ferry
 
-> 能力归于 pi agent，编排归于 Ferry
+> 能力归 pi，编排归 Ferry。
 
-Ferry 是一个个人定制的 IM 助理：飞书和微信的消息进来，交给 pi CLI 思考，再把回复送回去。它不生产智能，只负责收发、适配与守护
+Ferry 是个人使用的 pi 桥接服务。你可以从 PWA、飞书或微信发消息，由本机 pi 处理，再在原渠道收到回复。
 
-## 设计哲学
-
-两条原则决定了这个项目的形状：
-
-**pi-native**：pi 原生支持的能力，桥接层不重复实现。会话靠 pi 的 `--session-id` 续接，压缩由 pi 自己管，工具调用交给 pi 承担。桥接层每轮只发当前这一条消息，历史一字不带
-
-**桥接不膨胀**：不做 prompt 工程，不做 RAG，不做 workflow 引擎，不为想象中的多后端预留路由框架。单实例、文件持久化，不引入 Redis 和数据库。对个人项目而言，简单本身就是功能
+推理、工具调用、原生会话和上下文压缩交给 pi；Ferry 负责会话映射、消息收发、附件、命令、调度和进程管理。
+它面向单实例部署，以本地文件持久化，不引入数据库或 Redis，也不做多后端路由。
+Ferry 会注入本地规则、长期记忆和当前时间，但不另造一套模型历史或推理引擎。
 
 ## 架构
 
 ```mermaid
 flowchart LR
-    subgraph channels["渠道"]
-        FS["飞书<br/>WebSocket / Webhook"]
-        WX["微信<br/>iLink Sidecar (Node.js)"]
-    end
-
-    subgraph claw["Ferry (Python / FastAPI)"]
-        IN["入口层<br/>事件解析 · 签名校验"]
-        CORE["业务层<br/>去重 · 命令分发 · FIFO 队列 · 附件通知"]
-        CLI["PiCliClient<br/>流式 · 重试 · 熔断 · 取消"]
-        OUT["出站层<br/>渠道格式化 · 图片与文件回传"]
-    end
-
-    PI["pi CLI<br/>推理 · 工具调用 · 原生会话 · 上下文压缩"]
-
-    FS --> IN
-    WX --> IN
-    IN --> CORE --> CLI
-    CLI -- "pi --mode json --session-id" --> PI
-    PI -- "JSONL 流式回复" --> CLI
-    CLI --> OUT
-    OUT --> FS
-    OUT --> WX
+    PWA["PWA · 浏览器聊天"] --> F
+    FS["飞书 · WebSocket 长连接"] --> F
+    WX["微信 · Node.js iLink sidecar"] --> F
+    F["Ferry · Python / FastAPI<br/>会话 · 附件 · 命令 · 调度"] --> W
+    F --> C
+    W["pi worker · SDK 常驻进程"] --> PI
+    C["pi CLI · 按次启动"] --> PI
+    PI["pi<br/>推理 · 工具 · 原生会话 · 压缩"]
 ```
 
-一次请求的完整路径：
+SDK worker 和 CLI 是同一个 pi 后端的两种运行方式，不是两套智能体；默认使用 CLI，可配置常驻 worker。
+PWA 与控制台由独立的观测进程提供，聊天和控制请求转发到主服务。
 
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant C as 渠道 (飞书/微信)
-    participant B as Ferry
-    participant P as pi CLI
+## 能做什么
 
-    U->>C: 发消息
-    C->>B: 事件推送
-    B->>B: 校验 · 去重 · 命令拦截
-    B->>B: 进入会话 FIFO 队列
-    B->>P: 当前 user 消息 + session-id
-    P-->>B: text_delta 流式输出
-    P-->>B: message_end 成败判定
-    B->>C: 格式化 · 分段 · 图片上传
-    C->>U: 回复
-```
-
-## 能力
-
-- 双渠道对话：飞书走 WS 长连接，微信走 Node.js sidecar 长轮询，共享同一套会话逻辑
-- 飞书渐进式回复：占位卡先落地，pi 跑工具时卡片同步显示当前在跑的工具，正文到达后逐步覆盖同一张卡（微信保持整段回复）
-- 会话隔离与秩序：渠道会话 key → pi session 映射，消息去重，FIFO 排队，任务可取消
-- pi 生命周期管理：超时、重试、熔断、取消回收；已流出部分内容则不再重试，避免答一半重来
-- 文件与图片：入站图片经 pi 原生 `@file` 多模态喂给模型（飞书图文混排、微信图片均可），文件归档后随下一条消息附件通知，双渠道文件推送
-- 长期记忆与规则：`rules/` 与记忆经 `--append-system-prompt` 每轮注入，时间与时段走 system prompt，不污染 transcript
-- 定时能力：`/remind` 一次性提醒、`/daily` 每日任务，均持久化到本地文件
-- 私有可观测：独立看板进程统计轮次、阶段耗时、Token、工具与回发结果，另从 pi 原生历史只读采集全量 Token 用量；只看运行状态，不看聊天正文
+- **三端聊天**：PWA 流式正文与工具活动、飞书渐进式卡片；微信保持整段回复。
+- **会话与取消**：PWA 支持多会话、新建、改名和历史查看；渠道会话隔离，IM 消息去重、排队，运行任务可停止。
+- **图片与文件**：PWA 可上传附件；飞书、微信支持入站图片与文件归档，图片交给 pi 多模态处理，文件通知随下一条消息送入；支持 IM 文件回传。
+- **后台完成与恢复**：PWA 刷新、切换会话或断网不会重发提示词，服务端继续处理，重新打开可恢复进度与最终结果；主服务重启会中断在途轮次，没有离线发送队列。
+- **统一模型**：三渠道及 Web 每日任务共享模型和思考强度，控制台修改后从下一轮生效，不改变正在执行的轮次及其重试。
+- **记忆与调度**：NOTE-FORMAT 长期记忆、Dream 离线整理与报告、一次性提醒、每日任务；配置邮件后也可投送报告和每日任务。
+- **通知与外观**：用户主动授权后接收 PWA 回复、提醒和每日任务通知；可设置 App 名称、图标和外观，跟随系统明暗。
+- **独立控制台**：管理模型、记忆整理和定时任务，查看运行监控与 pi 历史 Token 用量；不是只有只读图表。
 
 ## 快速开始
 
-前置条件：Python 3.13+、可用的 pi CLI（先完成模型配置）；微信接入另需 Node.js
+以下命令在仓库根目录执行。推荐 Python 3.13+，另需 Git、Node.js ≥ 22.19 和 pi 1.2.0；常驻 worker 校验 pi 的准确版本。
 
 ```bash
-# 仅首次创建，已有配置则保留
-[ -f conf/.env ] || cp conf/.env.example conf/.env
-
+npm install -g @earendil-works/pi-coding-agent@1.2.0
 python3 -m venv .venv
 .venv/bin/python -m pip install -r conf/requirements.txt
+
+# 仅首次复制；已有配置不要覆盖
+[ -f conf/.env ] || cp conf/.env.example conf/.env
 ```
 
-编辑 `conf/.env`：填写飞书凭证 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，确认 `PI_CLI_BIN`、`PI_MODEL` 及模型服务凭证。候选模型在 `conf/pi/models.json`，启动时自动同步到 `~/.pi/agent/models.json`
+编辑 `conf/.env`，配置模型服务凭证和 `PI_MODEL`，先确保 pi 本身可以调用模型。
+使用飞书时填写 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，完成机器人权限和长连接事件订阅，见[渠道接入](docs/channels.md)。
+模型注册表位于 `conf/pi/models.json`，启动时同步到 pi agent 目录，默认是 `~/.pi/agent/models.json`。
+
+部分默认值如下；`PI_MODEL` 默认留空，使用时填注册表中的 `provider/model-id`：
+
+```dotenv
+PI_CLI_BIN=pi
+PI_MODEL=
+PI_THINKING=high
+PI_PERSISTENT_ENABLED=false
+PI_WORK_DIR=./runtime/codex-workdir/pi
+PI_TIMEOUT_SECONDS=180
+WEB_PUSH_ENABLED=false
+```
+
+常驻模式设 `PI_PERSISTENT_ENABLED=true`，配置 `PI_NODE_BIN` 和指向 pi 1.2.0 `dist/index.js` 绝对路径的 `PI_SDK_MODULE`；关闭后重启可退回 CLI。
+
+### 启动服务与控制台
+
+需要 PWA 或控制台时，先初始化独立凭证，再启动主服务，让两边读到相同的内部令牌：
 
 ```bash
+./bin/server obs credentials        # 首次生成，已有文件不覆盖；妥善保存仅显示一次的密码
+./bin/server obs credentials ensure # 老配置补齐用户名、控制与聊天令牌，不改密码
 ./bin/server start
 ./bin/server status
+./bin/server obs start
+./bin/server obs status
 ```
 
-微信首次登录与独立启动：
+控制台默认入口为 `http://127.0.0.1:38080/observability/`，私有配置在 `conf/.env.observability`。
+公开默认用户名是 `admin`，**它不是密码**；密码随机生成，仅保存哈希，没有默认密码。
+`OBSERVABILITY_USER_DISPLAY_NAME` 控制聊天中的本人显示名，默认“我”；个性化名称只写本机私有配置。
+已有部署保留自己的用户名、密码和令牌，不必重新生成。
+
+微信需扫码登录，之后可独立管理 sidecar：
 
 ```bash
 ./bin/server wx login
 ./bin/server wx start
 ```
 
-### Supervisor 托管
+`./bin/server start` 会启动主服务，并尝试启动已登录的微信及已启用的观测服务。
+总入口支持 `stop|restart|status`；微信用 `wx stop|restart|status`，控制台用 `obs stop|restart|status`。
 
-生产部署走 Supervisor 时，`./bin/server` 会自动检测并提示使用 supervisorctl，无需手动区分：
+### 部署脚本与 Supervisor
 
-```bash
-supervisorctl status
-supervisorctl restart 'ferry-stack:*'
-curl --fail http://127.0.0.1:8080/healthz
-```
+`bin/run-app` 等托管入口与 Supervisor 模板含固定解释器、PATH 或工作目录，须按部署环境调整，并确认实际进程使用的 Python、Node 和 pi 版本。
+归档、生成图片等目录也需确认权限与位置；已有部署不要随意移动 pi 工作目录和会话目录。
 
-> `/healthz` 只证明 HTTP 服务活着，不代表模型调用或渠道收发已验证
-
-### 私有可观测看板
-
-独立进程，默认 `127.0.0.1:38080/observability`，与主服务分开启停（Supervisor program 名 `ferry-observability`）。看板只回答「跑得怎么样」，不回答「聊了什么」：采集业务轮次、pi 尝试、可见模型响应、工具调用、队列与渠道回发结果，不采集聊天正文、思考、工具参数与结果、文件名与路径、原始报错；会话只以 HMAC 去标识化 ID 出现，且不作为 Prometheus 标签
+`bin/server` 检测到 Supervisor 后会代理管理命令；总入口的重启可能涉及整组服务。日常按模板名称选择需要更新的进程，**不要整组重启**：
 
 ```bash
-./bin/server obs credentials   # 首次生成私有配置，显示随机密码；已有凭证不覆盖
-./bin/server obs start
-./bin/server obs status
-# 远程访问：在自己的电脑执行
-ssh -N -L 38080:127.0.0.1:38080 <服务器>
+supervisorctl restart ferry-stack:ferry   # 仅主服务需要更新时
+supervisorctl restart ferry-observability # 仅独立控制台需要更新时
 ```
 
-页面按时间窗口、渠道、模型筛选，共五个页签：
+若补齐了主服务与控制台共用的令牌，两者都需重新加载，微信无需因此重启。
+HTTPS、反向代理和完整托管说明见[运维文档](docs/RELIABILITY.md)；`/healthz` 只证明 HTTP 存活，不代表模型或渠道正常。
 
-| 页签 | 内容 |
+## 配置与本地规则
+
+完整配置见 [conf/.env.example](conf/.env.example)。主服务读取 `conf/.env`，控制台私有项放在 `conf/.env.observability`。
+
+- `PI_MODEL`、`PI_THINKING` 统一用于 PWA、飞书、微信及 Web 每日任务。直接改环境配置需重启；控制台修改从下一轮生效。
+- 控制台选择持久化到 `runtime/server/console-settings.json`，优先于环境配置；“恢复默认”回到环境配置值。
+- 旧 `WEB_PI_MODEL`、`WEB_PI_THINKING` 已弃用，残留配置不再生效；Dream 可用 `DREAM_MODEL` 单独指定模型。
+- 模型、思考和调度等系统设置只接受白名单选项；聊天输入、会话名称与 App 外观有各自的编辑入口。
+- `rules/system.md` 与 `rules/admin.md` 都是本地私有规则，保留在本机并由 Git 忽略，不随源码分发。
+- 新克隆可按需自行建立这两个文件，不需要空模板；缺失时跳过，`system.md` 缺失会告警但不会阻止运行。
+- 规则每轮重读，经 pi 的 system prompt 注入；`rules/dream.md` 仍为公共整理规则，只用于 Dream，不注入日常聊天。
+- 从旧版本升级前先备份本机规则：Git 更新可能删除原先被跟踪的 `system.md`，升级后恢复到同名忽略路径；停止跟踪不会抹去旧提交历史。
+
+## 记忆、整理与定时任务
+
+长期记忆保存在 `memory/`，采用 NOTE-FORMAT：有键和日期的事实条目、上下文元数据及归档区；可明确要求记住内容，常驻类别按配置注入，变更保存在本地记忆快照仓。
+
+Dream 默认开启，每天 `02:00` 读取聊天增量，`08:00` 发送整理报告，时区由 `FERRY_TIMEZONE` 决定，默认 `Asia/Shanghai`。
+“离线整理”指不占用对话 worker 的后台任务，仍会调用模型服务，不代表断网运行。
+模型提出变更，Python 校验证据与敏感内容后才落盘；报告目标由 `DREAM_NOTIFY` 配置，留空不主动推送。
+控制台可调整时间、目标或立即整理；手动命令、撤销与格式说明见[记忆文档](docs/memory.md)。
+
+提醒和每日任务持久化并在重启后恢复。PWA 的结果保存在对应会话，即使没有通知权限也可查看。
+通知需服务端启用 `WEB_PUSH_ENABLED`、配置有效的 `WEB_PUSH_CONTACT`，再由用户主动授权；锁屏通知不带聊天正文。
+iPhone 需要 HTTPS 和主屏幕安装；原生键盘、系统推送、触感及图标更新差异仍需目标真机确认，不能以桌面模拟代替。
+
+## 常用对话命令
+
+| 命令 | 用途 |
 |---|---|
-| 总览 | 轮次与错误趋势、渠道与状态分布、最近轮次（仅元数据，无正文） |
-| 性能 | 各阶段耗时 P50 / P95 / P99 与均值、工具调用次数与错误（不含工具输入输出） |
-| Token 用量 | pi 原生历史全量用量，见下一节 |
-| 可靠性 | 错误轮次、取消轮次、重试、回发失败；采集质量（丢弃事件、写入错误、无效行、缺失用量）与告警 |
-| 运行状态 | 主服务资源与运行快照，不随窗口和渠道筛选 |
+| `/help`、`/skills` | 当前渠道帮助、本机项目技能 |
+| `/new`、`/reset` | 开始新上下文，清理附件通知与 pi 映射，不删除旧 transcript |
+| `/stop` | 取消当前任务；IM 同时清空排队消息 |
+| `/remind 10m 喝水` | 一次性提醒，支持 `s/m/h/d`；飞书和 PWA 可用，微信暂不支持 |
+| `/daily 08:00 今日安排` | 每日执行提示词；支持 `list`、`cancel <id>` |
+| `/memory`、`/memory undo` | 查看记忆状态、撤销最近一次 Dream 变更 |
+| `/dream`、`/dream all` | 立即整理当前对话或全部聊天对话 |
 
-访问控制分三层，凭证互不通用：
+`/compact`、`/compress` 只说明上下文由 pi 原生管理，不手动压缩；具体支持范围以渠道 `/help` 为准。
 
-| 入口 | 凭证 |
-|---|---|
-| 浏览器 | 单用户密码登录：scrypt 哈希 + 服务端 Session（默认 24h）+ 登录限流与 Origin 校验 |
-| `GET /api/observability/v1/*`、`GET /metrics` | 独立只读 Bearer Token，供 LLM 或脚本读取；不能改会话、不能上报 |
-| `POST /internal/observability/events` | 独立写 Token，且只接受回环来源；Nginx 模板对外返回 404 |
+## 监控、隐私与备份
 
-凭证只存 `conf/.env.observability`（0600、gitignored），由 `./bin/server obs credentials` 生成，不提供默认密码，明文密码不落盘也不入日志；只读 Token 与写 Token 不允许同值，配置校验直接拒绝
+运行监控统计轮次、耗时、Token、工具状态和回发结果，不采集聊天正文、思考、工具参数或结果。
+pi 历史用量只读扫描 transcript 的 usage 元数据，支持趋势、热力图与模型明细；与实时运行埋点是两本账，不能相加。
+在私有观测配置开启 `OBSERVABILITY_PI_USAGE_ENABLED=true` 后，可用 `./bin/server obs sync` 手动导入，观测进程重启后持续同步。
 
-对外部署：示例地址 `https://observability.example.com/observability`（替换为自己的域名），后端可监听 `0.0.0.0:38080` 并设 `OBSERVABILITY_COOKIE_SECURE=true`，不要用裸 HTTP 38080 提交登录密码。上面的 SSH 隧道方式适用于回环监听 + 关闭 Secure Cookie 的私有部署。Supervisor / Nginx 安装、完整接口清单、数据保留与完整性限制见 [运维说明](docs/RELIABILITY.md)
+**监控无正文，不等于整个系统不保存内容。** PWA 聊天存储、附件、pi transcript、记忆和 Dream 整理记录都可能包含私人内容。
+pi 1.2.0 还会保存 system 消息快照，包括注入的规则、记忆和时间；模型请求按当前轮重新构建，并非把所有旧系统快照重复注入。
+这些内容可能随请求交给所配置的模型服务；不要在规则或聊天中放入不愿发送的秘密。
 
-#### pi 历史 Token 用量
+对外访问使用 HTTPS，并设 `OBSERVABILITY_COOKIE_SECURE=true`；浏览器依赖登录 Cookie 与 CSRF 校验，内部接口不得公开代理。
+只读、上报、控制和聊天令牌彼此独立。私有配置、规则、日志、运行数据和记忆正文不应提交到源码仓库。
+备份需同时覆盖 pi transcript、会话映射、PWA 聊天与附件、记忆和调度状态；启用通知还需保存 VAPID 密钥及订阅。
+模型会话不能只靠网页历史恢复；IM 队列和待通知附件状态是内存态，不保证重启保留。详见[安全要求](docs/SECURITY.md)与[运维说明](docs/RELIABILITY.md)。
 
-「Token 用量」页参考 `dsh-panel`，只读扫描 pi 原生 JSONL 的 usage 元数据，不复制正文、不改原生会话：7/14/30/90 天、自定义（最多十年）与全部历史，180/365 天活动热力图，模型堆叠日趋势与缓存读取率，Top 5 + 其他环图、排名与模型明细。日界统一 Asia/Shanghai，缺记录不补零。这部分与 Ferry 实时埋点是两本账，Token 不相加
+## 项目与文档
 
-```bash
-# 在 conf/.env.observability 开启 OBSERVABILITY_PI_USAGE_ENABLED=true
-# 可选 OBSERVABILITY_PI_SESSION_DIRS 为 JSON 数组；默认使用 pi agent 目录的 sessions
-./bin/server obs sync       # 首次导入或手动增量同步，重复执行不会重复计数
-./bin/server obs restart    # 启动后台持续同步，默认每 30 秒检查变化文件
-```
+`bin/` 管理进程，`conf/` 放配置示例与依赖，`lib/python/` 实现主服务、渠道与控制台，`lib/js/` 提供微信 sidecar 和 pi worker。
+`rules/`、`skills/`、`memory/` 分别承载规则、项目技能与长期记忆；`runtime/` 和 `logs/` 保存本地状态与日志。
 
-机器读取：`GET /api/observability/v1/usage?range=all`（custom 带 `start` / `end`，`refresh=1` 触发后台单飞同步），沿用同一只读 Token。用量存在独立的不过期账本 `runtime/observability/pi-usage/index.json`，不受运行事件 30 天保留期限制；上下文压缩与分支摘要的用量计入消耗但不增加用户轮次，费用不估算
+`tests/` 只保留在本地，不随仓库分发；克隆后没有测试套件，不提供直接运行 pytest 的步骤。
+回归范围见[测试要点](docs/TEST.md)和[核心功能清单](docs/functional-tests.md)，真实渠道及 iPhone 体验需另行验收。
 
-> 边界：运行事件从启用后开始采集，不回填聊天历史；读端最多缓存 200000 条，达上限明确提示不完整。写盘失败或队列溢出不阻断 IM，但未落盘事件在异常退出时可能丢失；未闭合轮次显示运行中或未知，不补成成功。Prometheus counter 随进程重启归零，`/healthz` 只说明观测 HTTP 存活
-
-## 对话命令
-
-| 命令 | 行为 |
-|---|---|
-| `/help` | 查看当前渠道帮助 |
-| `/new`、`/reset` | 清空附件与 pi 会话映射，下轮开启新上下文 |
-| `/stop` | 取消当前任务并清空排队消息 |
-| `/skills` | 查询本机可用技能 |
-| `/remind 10m 内容` | 定时提醒，支持 `s/m/h/d`，微信暂不支持 |
-| `/daily 08:00 提示词` | 每日任务，支持 `list`、`cancel <id>` |
-
-`/compact` 只说明上下文由 pi 原生管理，不执行手工压缩；旧后端切换命令只提示已移除
-
-## 配置
-
-全部配置项见 [conf/.env.example](conf/.env.example)，常用的几个
-
-| 配置 | 说明 |
-|---|---|
-| `PI_CLI_BIN` | pi 命令名或绝对路径，默认 `pi` |
-| `PI_MODEL` | `provider/model-id`，改这一行加重启即切换模型 |
-| `PI_WORK_DIR` | pi 工作目录，默认 `./runtime/codex-workdir/pi` |
-| `PI_TIMEOUT_SECONDS` | 单次 CLI 尝试总时限，默认 180 秒 |
-| `PUSH_API_TOKEN` | 出站文件推送 `POST /push/file` 的鉴权 |
-| `OBSERVABILITY_ENABLED` | 主服务是否埋点；观测服务自身凭证与开关在 `conf/.env.observability` |
-
-迁移注意：旧 `CODEX_*` 键仅作回退；不要直接移动现有 cwd、session store 或 agent dir，恢复会话需要映射与 pi transcript 同时可用。详见 [单 pi 接入与迁移](docs/routing.md)
-
-## 测试
-
-```bash
-.venv/bin/python -m pytest -c conf/pytest.ini -q
-node --test tests/wechat-sidecar.test.mjs
-# pi-worker SDK 测试需 Node >= 22.19（与 pi 运行时一致）
-/root/.nvm/versions/node/v22.23.2/bin/node --test tests/pi-worker.test.mjs
-```
-
-`tests/` 是本地目录，不随仓库分发（已取消跟踪 + `.gitignore`）：clone 下来无测试可跑，用例映射见 [测试要点](docs/TEST.md)
-
-验收清单见 [核心功能回归测试](docs/functional-tests.md)，每次迭代必过
-
-## 项目结构
-
-```text
-bin/          服务控制与托管启动入口
-conf/         环境配置、pi 模型注册表、依赖与 pytest 配置
-lib/python/   应用入口、双渠道、PiCliClient、会话与队列、可选观测
-lib/js/       微信 sidecar
-rules/        注入 pi 的规则：system.md 公共 / admin.md 私有（gitignored）
-skills/       项目级技能
-memory/       长期记忆
-runtime/      会话映射与运行状态
-tests/        Python 与 Node 测试（本地目录，不入库）
-docs/         架构、运维与变更记录
-```
-
-## 文档
-
-[文档索引](docs/index.md) · [架构设计](docs/architecture.md) · [核心设计信念](docs/core-beliefs.md) · [会话管理](docs/sessions.md) · [变更记录](docs/requirement-changes.md)
+[文档索引](docs/index.md) · [功能清单](docs/PRODUCT.md) · [架构](docs/architecture.md) · [会话](docs/sessions.md) · [变更记录](docs/requirement-changes.md)
 
 ## 许可
 

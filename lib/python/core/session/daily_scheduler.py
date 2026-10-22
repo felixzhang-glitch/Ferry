@@ -35,6 +35,13 @@ class DailyTask:
     minute: int
     last_run_date: str = ""
     created_at: float = field(default_factory=time.time)
+    enabled: bool = True
+    pending_date: str = ""
+    pending_text: str = ""
+    pending_success: bool = False
+
+
+CHANNELS = {"feishu", "wechat", "email", "web"}
 
 
 class DailyTaskScheduler:
@@ -45,9 +52,14 @@ class DailyTaskScheduler:
         run_callback: DailyRunCallback,
         push_callback: DailyPushCallback,
         store_path: str = "",
+        *,
+        web_run_callback: DailyRunCallback | None = None,
+        web_push_callback: Callable[[str, str, str, bool], Awaitable[None]] | None = None,
     ) -> None:
         self._run_callback = run_callback
         self._push_callback = push_callback
+        self._web_run_callback = web_run_callback
+        self._web_push_callback = web_push_callback
         self._store_path = Path(store_path) if store_path else None
         self._tasks: dict[str, DailyTask] = {}
         self._loops: dict[str, asyncio.Task[None]] = {}
@@ -57,7 +69,8 @@ class DailyTaskScheduler:
         for task in self._load_tasks():
             async with self._lock:
                 self._tasks[task.task_id] = task
-                self._loops[task.task_id] = asyncio.create_task(self._run_loop(task))
+                if task.enabled:
+                    self._loops[task.task_id] = asyncio.create_task(self._run_loop(task))
 
     async def schedule(self, channel: str, target_id: str, prompt: str, hour: int, minute: int) -> DailyTask:
         task = DailyTask(
@@ -76,6 +89,49 @@ class DailyTaskScheduler:
 
     def list_tasks(self) -> list[DailyTask]:
         return sorted(self._tasks.values(), key=lambda task: (task.hour, task.minute, task.created_at))
+
+    def get(self, task_id: str) -> DailyTask | None:
+        return self._tasks.get(task_id)
+
+    async def update(
+        self,
+        task_id: str,
+        *,
+        enabled: bool | None = None,
+        hour: int | None = None,
+        minute: int | None = None,
+        channel: str | None = None,
+        target_id: str | None = None,
+    ) -> DailyTask | None:
+        """Change schedule, delivery target or on/off; the prompt is never editable here."""
+        if hour is not None and not 0 <= hour <= 23:
+            raise ValueError("hour out of range")
+        if minute is not None and not 0 <= minute <= 59:
+            raise ValueError("minute out of range")
+        if (channel is None) != (target_id is None):
+            raise ValueError("channel and target_id change together")
+        if channel is not None and (channel not in CHANNELS or not str(target_id).strip()):
+            raise ValueError("invalid delivery target")
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return None
+            if enabled is not None:
+                task.enabled = enabled
+            if hour is not None:
+                task.hour = hour
+            if minute is not None:
+                task.minute = minute
+            if channel is not None:
+                task.channel, task.target_id = channel, str(target_id).strip()
+            old_loop = self._loops.pop(task_id, None)
+            if task.enabled:
+                self._loops[task_id] = asyncio.create_task(self._run_loop(task))
+            await self._save_unlocked()
+        if old_loop is not None:
+            old_loop.cancel()
+            await asyncio.gather(old_loop, return_exceptions=True)
+        return task
 
     async def cancel(self, task_id_prefix: str) -> DailyTask | None:
         prefix = task_id_prefix.strip()
@@ -109,7 +165,7 @@ class DailyTaskScheduler:
         # forever silent until restart. Supervise: log, back off, retry.
         while True:
             try:
-                if self._should_catch_up(task):
+                if task.pending_date or self._should_catch_up(task):
                     await self._execute(task)
                 while True:
                     await asyncio.sleep(self._seconds_until_next_run(task))
@@ -125,8 +181,36 @@ class DailyTaskScheduler:
                 )
                 await asyncio.sleep(60.0)
 
+    async def _execute_web(self, task: DailyTask) -> None:
+        if self._web_push_callback is None or self._web_run_callback is None:
+            raise RuntimeError("Web daily delivery unavailable")
+        if not task.pending_date:
+            today = self._today()
+            answer = ""
+            try:
+                answer = (await self._web_run_callback(task.prompt, f"daily:{task.task_id}:{today}",
+                                                      f"daily-{task.task_id}-{today}")).strip()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("web daily generation failed", extra={"event": "daily.run_error"})
+            task.pending_date = today
+            task.pending_success = bool(answer)
+            task.pending_text = answer or "简报生成失败，请检查服务状态后重试。"
+        async with self._lock:
+            await self._save_unlocked(strict=True)
+        await self._web_push_callback(task.target_id, task.pending_text,
+                                      f"daily-{task.task_id}-{task.pending_date}", task.pending_success)
+        task.last_run_date = task.pending_date
+        task.pending_date, task.pending_text, task.pending_success = "", "", False
+        async with self._lock:
+            await self._save_unlocked(strict=True)
+
     @observe_run(channel="scheduled")
     async def _execute(self, task: DailyTask) -> None:
+        if task.channel == "web":
+            await self._execute_web(task)
+            return
         today = self._today()
         trace_id = f"daily-{task.task_id[:8]}-{today}"
         session_key = f"daily:{task.task_id}:{today}"
@@ -234,7 +318,7 @@ class DailyTaskScheduler:
                     tasks.append(task)
         return tasks
 
-    async def _save_unlocked(self) -> None:
+    async def _save_unlocked(self, *, strict: bool = False) -> None:
         if self._store_path is None:
             return
         payload = [
@@ -247,19 +331,32 @@ class DailyTaskScheduler:
                 "minute": task.minute,
                 "last_run_date": task.last_run_date,
                 "created_at": task.created_at,
+                "enabled": task.enabled,
+                "pending_date": task.pending_date,
+                "pending_text": task.pending_text,
+                "pending_success": task.pending_success,
             }
             for task in self._tasks.values()
         ]
-        await asyncio.to_thread(self._write_payload, payload)
+        if strict:
+            await asyncio.to_thread(self._write_payload, payload, True)
+        else:
+            await asyncio.to_thread(self._write_payload, payload)
 
-    def _write_payload(self, payload: list[dict[str, Any]]) -> None:
+    def _write_payload(self, payload: list[dict[str, Any]], strict: bool = False) -> None:
         try:
             self._store_path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = self._store_path.with_suffix(f"{self._store_path.suffix}.tmp")
-            temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                file.write(json.dumps(payload, ensure_ascii=False, indent=2))
+                file.flush()
+                os.fsync(file.fileno())
             os.replace(temp_path, self._store_path)
         except OSError:
             logger.exception("failed to save daily tasks", extra={"event": "daily.save"})
+            if strict:
+                raise
 
     @staticmethod
     def _parse_task(item: dict[str, Any]) -> DailyTask | None:
@@ -267,7 +364,7 @@ class DailyTaskScheduler:
         channel = str(item.get("channel", "")).strip()
         target_id = str(item.get("target_id", "")).strip()
         prompt = str(item.get("prompt", "")).strip()
-        if not task_id or channel not in {"feishu", "wechat"} or not target_id or not prompt:
+        if not task_id or channel not in CHANNELS or not target_id or not prompt:
             return None
         try:
             hour = int(item.get("hour"))
@@ -286,4 +383,8 @@ class DailyTaskScheduler:
             minute=minute,
             last_run_date=str(item.get("last_run_date", "")).strip(),
             created_at=created_at,
+            enabled=item.get("enabled", True) is not False,
+            pending_date=str(item.get("pending_date", "")),
+            pending_text=str(item.get("pending_text", "")),
+            pending_success=item.get("pending_success") is True,
         )

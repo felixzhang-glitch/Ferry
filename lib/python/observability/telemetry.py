@@ -28,14 +28,14 @@ from typing import Any
 
 BUCKETS = (.05, .1, .25, .5, 1., 2.5, 5., 10., 20., 30., 60., 120., 300., 600., 1800.)
 ENUMS = {
-    'channel': {'feishu', 'wechat', 'system'},
+    'channel': {'feishu', 'wechat', 'web', 'system'},
     'source': {'interactive', 'scheduled', 'push', 'system'},
     'status': {'received', 'accepted', 'duplicate', 'rejected', 'dropped', 'success', 'error',
                'cancelled', 'partial', 'unknown', 'start', 'end'},
     'stage': {'queue_wait', 'delivery', 'first_delivery', 'pipeline', 'agent', 'attempt',
               'first_text', 'tool', 'worker_wait', 'worker_setup', 'task_generation', 'task_delivery', 'channel_io'},
     'operation': {'reply', 'card_create', 'card_update', 'send', 'upload', 'download',
-                  'reminder', 'daily', 'reset', 'other'},
+                  'reminder', 'daily', 'dream', 'reset', 'other'},
     'tool': {'bash', 'read', 'write', 'edit', 'grep', 'find', 'ls', 'web', 'other'},
     'stop_reason': {'stop', 'toolUse', 'length', 'error', 'aborted', 'unknown'},
     'error_type': {'timeout', 'cancelled', 'transport', 'agent', 'unknown'},
@@ -47,7 +47,7 @@ NUMBERS = {'duration_seconds', 'ttft_seconds', 'started_at', 'tokens_input', 'to
            'attempts', 'count', 'model_responses'}
 IDENTIFIER = re.compile(r'^[a-f0-9]{32}$')
 MODEL_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,95}$')
-GAUGES = {'queue_feishu', 'queue_wechat', 'active_tasks', 'worker_total', 'worker_busy',
+GAUGES = {'queue_feishu', 'queue_wechat', 'queue_web', 'active_web_turns', 'active_tasks', 'worker_total', 'worker_busy',
           'worker_starting', 'circuit_open', 'session_mappings', 'daily_tasks', 'reminders',
           'rss_bytes', 'cpu_seconds', 'disk_free_bytes', 'event_loop_lag_seconds', 'pi_active', 'runtime_sampled_at'}
 

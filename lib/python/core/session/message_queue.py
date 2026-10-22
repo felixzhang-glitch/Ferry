@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 def _channel(session_key: str) -> str:
+    if session_key.startswith("web:"):
+        return "web"
     return "wechat" if session_key.startswith("wechat:") else "feishu"
 
 
@@ -41,6 +43,8 @@ class SessionMessageQueue:
         session_key: str,
         job: Callable[[], Awaitable[None]],
         on_drop: Callable[[], None] | None = None,
+        *,
+        queue_if_busy: bool = True,
     ) -> QueueStatus:
         """入队一条消息处理任务。返回是否接受与排队位置。"""
         async with self._lock:
@@ -50,7 +54,7 @@ class SessionMessageQueue:
                 self._sessions[session_key] = state
 
             pending = state.queue.qsize()
-            if pending >= self._max_pending:
+            if pending >= self._max_pending or (not queue_if_busy and (pending or state.running)):
                 emit("queue", channel=_channel(session_key), status="rejected", count=1)
                 return QueueStatus(accepted=False)
 

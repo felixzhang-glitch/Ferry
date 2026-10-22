@@ -16,6 +16,9 @@ class AgentClientCancelled(AgentClientError):
 # settles. Channels use it to show progress during the silent stretch before the
 # first text delta; implementations must not raise into the agent loop.
 ProgressCallback = Callable[[str | None], Awaitable[None]]
+ToolEventCallback = Callable[[dict], Awaitable[None]]
+# Empty final text clears provisional content; non-JSON output has no final callback.
+FinalTextCallback = Callable[[str], Awaitable[None]]
 
 
 class AgentClient(Protocol):
@@ -28,6 +31,8 @@ class AgentClient(Protocol):
         *,
         session_key: str | None = None,
         image_paths: list[str] | None = None,
+        model: str | None = None,
+        thinking: str | None = None,
     ) -> str: ...
 
     def chat_stream(
@@ -38,6 +43,10 @@ class AgentClient(Protocol):
         session_key: str | None = None,
         image_paths: list[str] | None = None,
         on_progress: ProgressCallback | None = None,
+        on_tool_event: ToolEventCallback | None = None,
+        model: str | None = None,
+        thinking: str | None = None,
+        on_final_text: FinalTextCallback | None = None,
     ) -> AsyncIterator[str]: ...
 
     def cancel(self, trace_id: str) -> bool: ...

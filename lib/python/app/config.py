@@ -119,6 +119,9 @@ class Settings(BaseSettings):
     # Bailian Standard plan (token-plan endpoint, provider "bailian-plan").
     pi_bailian_plan_api_key: str = Field(default="", validation_alias="BAILIAN_PLAN_API_KEY")
     pi_thinking: str = Field(default="high", validation_alias="PI_THINKING")
+    web_push_enabled: bool = Field(default=False, validation_alias="WEB_PUSH_ENABLED")
+    web_push_contact: str = Field(default="", validation_alias="WEB_PUSH_CONTACT")
+    web_push_store_dir: str = Field(default="./runtime/server/web-push", validation_alias="WEB_PUSH_STORE_DIR")
     pi_tools: str = Field(default="", validation_alias="PI_TOOLS")
     pi_agent_dir: str = Field(default="", validation_alias="PI_CODING_AGENT_DIR")
     pi_offline: bool = Field(default=True, validation_alias="PI_OFFLINE")
@@ -175,6 +178,21 @@ class Settings(BaseSettings):
         default="./runtime/server/memory-context.md",
         validation_alias="MEMORY_CONTEXT_PATH",
     )
+
+    dream_enabled: bool = Field(default=True, validation_alias="DREAM_ENABLED")
+    dream_time: str = Field(default="02:00", validation_alias="DREAM_TIME")
+    dream_report_time: str = Field(default="08:00", validation_alias="DREAM_REPORT_TIME")
+    dream_notify: str = Field(default="", validation_alias="DREAM_NOTIFY")
+    dream_model: str = Field(default="", validation_alias="DREAM_MODEL")
+    dream_timeout_seconds: float = Field(default=600.0, validation_alias="DREAM_TIMEOUT_SECONDS")
+    dream_max_transcript_chars: int = Field(default=40000, validation_alias="DREAM_MAX_TRANSCRIPT_CHARS")
+    web_chat_store_dir: str = Field(default="./runtime/server/web-chat", validation_alias="WEB_CHAT_STORE_DIR")
+
+    mail_smtp_host: str = Field(default="smtp.163.com", validation_alias="MAIL_SMTP_HOST")
+    mail_smtp_port: int = Field(default=465, validation_alias="MAIL_SMTP_PORT")
+    mail_sender: str = Field(default="", validation_alias="MAIL_SENDER")
+    mail_recipients: str = Field(default="", validation_alias="MAIL_RECIPIENTS")
+    mail_env_file: str = Field(default="~/.env/smtp-mail-assistant.env", validation_alias="MAIL_ENV_FILE")
 
     server_host: str = Field(default="0.0.0.0", validation_alias="SERVER_HOST")
     server_port: int = Field(default=8080, validation_alias="SERVER_PORT")

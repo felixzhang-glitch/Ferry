@@ -14,7 +14,7 @@ Run `scripts/mail_assistant.mjs` with Bun to parse one sentence into a send/list
 1. Credentials load automatically from `~/.env/smtp-mail-assistant.env` (KEY=VALUE lines):
 ```
 MAIL_ASSISTANT_AUTH_CODE=xxxx
-# MAIL_ASSISTANT_EMAIL=toolkit_t@163.com   # optional, default sender
+MAIL_ASSISTANT_EMAIL=your-address@example.com
 ```
 Process env vars take precedence over the file. Override the file path with `MAIL_ASSISTANT_ENV_FILE`.
 2. Run one sentence (see examples below).
@@ -64,7 +64,7 @@ bun scripts/mail_assistant.mjs "查看最近3封邮件" --dry-run
 ### Optional Flags
 
 - `--attach <file>`: add an attachment (repeatable); merged with paths parsed from the instruction. Dry-run still validates file existence and size.
-- `--email`: override sender account, fallback to `MAIL_ASSISTANT_EMAIL`, then `toolkit_t@163.com`.
+- `--email`: override sender account; otherwise set `MAIL_ASSISTANT_EMAIL` in the environment or private credentials file. There is no built-in sender account.
 - `--auth-code`: override mail auth code, fallback to `MAIL_ASSISTANT_AUTH_CODE`.
 - `--smtp-host`, `--smtp-port`: override SMTP endpoint.
 - `--pop3-host`, `--pop3-port`: override POP3 endpoint.

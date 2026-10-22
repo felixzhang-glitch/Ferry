@@ -6,6 +6,9 @@ import secrets
 from pathlib import Path
 
 
+DEFAULT_USERNAME = 'admin'
+
+
 def provision(path: Path) -> dict[str, str] | None:
     from observability.security import hash_password
     if path.exists():
@@ -27,7 +30,10 @@ def provision(path: Path) -> dict[str, str] | None:
         f'OBSERVABILITY_HMAC_KEY={key}',
         '# HTTP is permitted ONLY over a loopback/SSH tunnel. Use true behind HTTPS.',
         'OBSERVABILITY_COOKIE_SECURE=false',
-        'OBSERVABILITY_SESSION_TTL_SECONDS=86400', '',
+        'OBSERVABILITY_SESSION_TTL_SECONDS=2592000',
+        f'OBSERVABILITY_USERNAME={DEFAULT_USERNAME}',
+        f'OBSERVABILITY_CONSOLE_TOKEN={secrets.token_urlsafe(32)}',
+        f'OBSERVABILITY_CHAT_TOKEN={secrets.token_urlsafe(32)}', '',
     ])
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -41,8 +47,41 @@ def provision(path: Path) -> dict[str, str] | None:
     return {'password': password, 'read_token': read_token}
 
 
-def main() -> None:
+def ensure(path: Path) -> list[str]:
+    """Append console keys missing from an existing file; the password is never touched."""
+    if path.is_symlink() or not path.is_file():
+        return []
+    text = path.read_text(encoding='utf-8')
+    present = {line.split('=', 1)[0].strip() for line in text.splitlines() if '=' in line and not line.lstrip().startswith('#')}
+    additions = []
+    if 'OBSERVABILITY_USERNAME' not in present:
+        additions.append(f'OBSERVABILITY_USERNAME={DEFAULT_USERNAME}')
+    if 'OBSERVABILITY_CONSOLE_TOKEN' not in present:
+        additions.append(f'OBSERVABILITY_CONSOLE_TOKEN={secrets.token_urlsafe(32)}')
+    if 'OBSERVABILITY_CHAT_TOKEN' not in present:
+        additions.append(f'OBSERVABILITY_CHAT_TOKEN={secrets.token_urlsafe(32)}')
+    if not additions:
+        return []
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'a', encoding='utf-8') as handle:
+        handle.write(('' if text.endswith('\n') else '\n') + '\n'.join(additions) + '\n')
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(path, 0o600)
+    return [line.split('=', 1)[0] for line in additions]
+
+
+def main(argv: list[str] | None = None) -> None:
+    import sys
+    args = sys.argv[1:] if argv is None else argv
     path = Path(__file__).resolve().parents[3] / 'conf' / '.env.observability'
+    if args[:1] == ['ensure']:
+        added = ensure(path)
+        print(f"已补充：{', '.join(added)}" if added else f'无需补充：{path}')
+        return
+    if args:
+        print('用法：credentials [ensure]')
+        return
     result = provision(path)
     if result is None:
         print(f'凭证文件已存在，未覆盖：{path}')

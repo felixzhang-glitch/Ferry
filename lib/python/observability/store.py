@@ -122,7 +122,7 @@ class MetricReader:
         self._refresh_at = time.monotonic() + 1.
 
     def query(self, window: str = '24h', channel: str = 'all', model: str = 'all') -> dict:
-        if window not in WINDOWS or channel not in {'all', 'feishu', 'wechat', 'system'}:
+        if window not in WINDOWS or channel not in {'all', 'feishu', 'wechat', 'web', 'system'}:
             raise ValueError('unsupported query window or channel')
         if not isinstance(model, str) or len(model) > 96:
             raise ValueError('invalid model filter')

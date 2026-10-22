@@ -1,0 +1,19 @@
+{
+  "id": "/observability/",
+  "name": "Ferry 控制台",
+  "short_name": "Ferry",
+  "description": "Ferry 个人助手对话、用量与记忆控制台",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "/observability/#chat",
+  "scope": "/observability/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F9FAFB",
+  "theme_color": "#F9FAFB",
+  "icons": [
+    { "src": "/static/console-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/console-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/console-icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

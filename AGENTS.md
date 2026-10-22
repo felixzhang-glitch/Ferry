@@ -11,8 +11,9 @@
 ### 常用命令
 
 - 运行：`./bin/server start`（首次启动引导配置飞书凭证）、`./bin/server stop|restart|status`
-- 可观测：`./bin/server obs credentials|start|stop|restart|status|sync`（独立进程，默认 `127.0.0.1:38080/observability`；私有配置 `conf/.env.observability`）
+- 控制台：`./bin/server obs credentials [ensure]|start|stop|restart|status|sync`（独立进程，默认 `127.0.0.1:38080/observability/`；私有配置 `conf/.env.observability`，`ensure` 补齐用户名与控制台令牌）
 - 测试：`cd conf && pytest -q`（配置在 `conf/pytest.ini`，pythonpath 指向 `lib/python`）；`tests/` 为本地目录，不入库
+- 记忆旧格式迁移：`PYTHONPATH=lib/python python3 -m app.memory_migrate`（dry-run 看 diff），确认后加 `--apply`
 - 依赖安装：`pip install -r conf/requirements.txt`
 
 ### 硬性约束
@@ -20,7 +21,7 @@
 - 个人项目简洁优先：单实例部署，文件持久化，不引入外部存储；代码改动优先验证现有测试通过
 - 迭代必须回归核心功能：每次迭代完成后对照 `docs/functional-tests.md` 验证，避免破坏已有功能
 - 每次需求变化（新功能 / 行为调整 / 缺陷修复）完成后，在 `docs/requirement-changes.md` 顶部追加一条记录（日期 + 需求内容 + 影响范围）
-- 不提交敏感信息：配置走 `conf/.env`（不入库，仅 `.env.example`；`.env` 的一切变体与时间戳备份同样不入库），`rules/admin.md`、`tests/`、`logs/`、`runtime/`、`memory/`（除 `README.md`）保持 gitignored；推送 GitHub 前走 pre-push 密钥扫描钩子（`.qoder/hooks/`）与 `git-push` skill 的 `preflight.py` 闸门，确认误报的白名单写在 `.git-push-allowlist.txt`
+- 不提交敏感信息：配置走 `conf/.env`（不入库，仅 `.env.example`；`.env` 的一切变体与时间戳备份同样不入库），`rules/system.md`、`rules/admin.md`、`tests/`、`logs/`、`runtime/`、`memory/`（除 `README.md`）保持 gitignored；推送 GitHub 前走 pre-push 密钥扫描钩子（`.qoder/hooks/`）与 `git-push` skill 的 `preflight.py` 闸门，确认误报的白名单写在 `.git-push-allowlist.txt`
 
 ## 代码地图
 
@@ -28,21 +29,25 @@
 
 ```
 lib/python/
-  app/            → FastAPI 入口(main)、配置(config)、命令分发(commands)、skills 发现(skills)、记忆(memory)、日志
+  app/            → FastAPI 入口(main)、配置(config)、命令分发(commands)、skills 发现(skills)、记忆(memory)、
+                    NOTE-FORMAT 解析与投影(memory_format)、Dream 离线记忆整理(dream)、旧格式迁移(memory_migrate)、
+                    控制台白名单配置(console)与回环接口(console_api)、邮件渠道(mailer)、日志
   channel/feishu/ → 飞书渠道全链路：webhook 解析(handler)、WS 长连接(ws_client)、
                     安全校验(security)、消息回发(client)、格式化(formatting)、图片(media)
   channel/wechat/ → 微信渠道处理（接收 sidecar 转发的消息）
   core/agent/     → PiCliClient（原生会话/流式/取消/重试/熔断）与轻量接口和异常(types)
   core/session/   → 会话隔离与附件通知(manager)、去重(deduplicator)、任务注册(task_registry)、
                     定时提醒(reminder_scheduler)、每日任务(daily_scheduler)、消息队列(message_queue)
-  observability/  → 可选的无正文可观测：白名单埋点(telemetry)、JSONL 事件账本与增量读端(store)、
+  observability/  → Ferry 控制台（原可观测看板，用户名登录 / 持久会话 / PWA / 控制台转发）+ 可选的无正文可观测：白名单埋点(telemetry)、JSONL 事件账本与增量读端(store)、
                     独立看板服务(web)+静态页(static)、鉴权原语(security)、凭证生成(credentials)、
                     pi 历史用量账本(pi_usage / usage_cli)、独立配置(config，不导入 app.config)
 
 lib/js/wechat-sidecar.mjs → 微信 iLink Bot 长轮询 sidecar（Node.js）
 bin/server        → 服务控制（start/stop/restart/status、wx login|start|stop、obs credentials|start|stop|restart|status|sync）
 conf/.env.example → 全部配置项及默认值（主服务绑定 lib/python/app/config.py，观测绑定 lib/python/observability/config.py）
-rules/            → 注入 pi 的规则：system.md 公共 / admin.md 私有（gitignored），走 `--append-system-prompt`
+rules/            → 注入 pi 的本地私有规则：system.md / admin.md 均 gitignored，走 `--append-system-prompt`；
+                    dream.md 只给 Dream 的一次性整理调用，不进聊天
+memory/           → 长期记忆（NOTE-FORMAT，仅 README 入库），设计见 `docs/memory.md`
 skills/           → 项目级 skills；每轮时间通过 pi system prompt 注入，不落入会话历史
 docs/index.md     → 项目文档索引 **重点，不了解项目的话优先看这里**
 ```
