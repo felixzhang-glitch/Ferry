@@ -4,6 +4,7 @@
 |------|------|
 | [architecture.md](architecture.md) | 系统架构与技术栈 |
 | [DESIGN.md](DESIGN.md) | Ferry 控制台视觉与交互规范（DeepSeek Harness 风格、明暗 token、PWA） |
+| [ios.md](ios.md) | iPhone 原生轻客户端、健康/日历/提醒只读同步与 macOS 签名 |
 | [channels.md](channels.md) | 渠道接入：飞书 WS 长连接 / 微信 sidecar |
 | [routing.md](routing.md) | 单 pi 接入：接口、只读状态命令、配置迁移与数据兼容 |
 | [sessions.md](sessions.md) | pi 原生会话、key 与附件通知、去重、队列、定时任务 |
@@ -17,4 +18,4 @@
 | [RELIABILITY.md](RELIABILITY.md) | 可靠性与运维：部署、Ferry 控制台与 pi 历史 Token 用量、Dream 与报告推送、故障处理 |
 | [QUALITY_SCORE.md](QUALITY_SCORE.md) | 质量评分基线与复评记录 |
 | [../.qoder/hooks/README.md](../.qoder/hooks/README.md) | 推送前密钥扫描钩子：安装、覆盖范围、误报处理（`.qoder` 不入库，此类文件仅本机可见） |
-| [references/README.md](references/README.md) | 外部参考资料：[pi-cli.txt](references/pi-cli.txt)（唯一后端）、[feishu-bot-api.md](references/feishu-bot-api.md)、[wechat-ilink.md](references/wechat-ilink.md) |
+| [references/README.md](references/README.md) | 外部参考资料：[pi-cli.txt](references/pi-cli.txt)（唯一后端）、[feishu-bot-api.md](references/feishu-bot-api.md)、[wechat-ilink.md](references/wechat-ilink.md)、[garmin-mcp.md](references/garmin-mcp.md)（佳明健康数据 MCP） |

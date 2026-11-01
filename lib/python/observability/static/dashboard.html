@@ -85,11 +85,12 @@
       </header>
 
       <main id="main">
-        <section id="view-chat" class="view chat-layout" aria-label="个人助手对话" hidden>
-          <aside class="chat-threads" aria-label="对话列表">
+        <section id="view-chat" class="view chat-layout" data-threads="collapsed" aria-label="个人助手对话" hidden>
+          <aside id="chat-threads" class="chat-threads" aria-label="对话列表">
             <div class="chat-list-head"><button id="chat-new" type="button" class="primary" aria-busy="false">新对话</button></div>
             <div id="chat-thread-list" class="chat-thread-list"></div>
           </aside>
+          <div class="chat-threads-rail"><button id="chat-threads-toggle" type="button" class="chat-threads-toggle" aria-controls="chat-threads" aria-expanded="false" aria-label="展开对话列表" title="展开对话列表"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6l6 6-6 6"/></svg></button></div>
           <div id="chat-room" class="chat-room">
             <header class="chat-head">
               <button id="chat-open-drawer" type="button" class="icon-button" aria-label="打开对话列表" title="打开对话列表" aria-haspopup="dialog" aria-controls="chat-drawer"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
@@ -207,7 +208,7 @@
         <section id="view-tasks" class="view" hidden><div id="tasks-root" class="stack"></div></section>
         <section id="view-settings" class="view" hidden>
           <section id="appearance-panel" class="card appearance-panel" aria-labelledby="appearance-title">
-            <div class="card-head"><div><h2 id="appearance-title">助手外观与触感</h2><p class="caption">只改变界面和安装图标，不改变登录用户名、pi 或助手规则。</p></div><button id="appearance-refresh" type="button" class="link-button" data-haptic>重新读取</button></div>
+            <div class="card-head"><div><h2 id="appearance-title">助手外观与触感</h2><p class="caption">只改变界面和安装图标，不改变登录用户名、pi 或助手规则。</p></div><button id="appearance-refresh" type="button" class="link-button">重新读取</button></div>
             <p id="appearance-current" class="caption"></p>
             <form id="appearance-form" novalidate aria-describedby="appearance-status appearance-privacy" aria-busy="false">
               <fieldset id="appearance-fields" disabled>
@@ -215,13 +216,13 @@
                 <label class="field" for="appearance-name"><span class="field-label">助手名称（1–32 个字符）</span><input id="appearance-name" name="name" type="text" maxlength="64" autocomplete="off" value="Ferry" required aria-describedby="appearance-status"></label>
                 <div class="appearance-avatar-row">
                   <img id="appearance-preview" src="/static/console-icon-192.png" alt="助手头像预览" width="56" height="56">
-                  <div class="appearance-avatar-controls"><label class="field" for="appearance-file"><span class="field-label">头像 · 本地缩小后上传，最多 2 MiB</span><input id="appearance-file" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif" aria-describedby="appearance-file-note"></label><p id="appearance-file-note" class="caption"></p><div class="actions"><button id="appearance-remove-avatar" type="button" class="link-button" data-haptic>移除头像</button><button id="appearance-undo-avatar" type="button" class="link-button" data-haptic hidden>撤销头像修改</button></div></div>
+                  <div class="appearance-avatar-controls"><label class="field" for="appearance-file"><span class="field-label">头像 · 本地缩小后上传，最多 2 MiB</span><input id="appearance-file" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif" aria-describedby="appearance-file-note"></label><p id="appearance-file-note" class="caption"></p><div class="actions"><button id="appearance-remove-avatar" type="button" class="link-button">移除头像</button><button id="appearance-undo-avatar" type="button" class="link-button" hidden>撤销头像修改</button></div></div>
                 </div>
                 <label class="appearance-haptics"><input id="appearance-haptics" type="checkbox" switch name="haptics_enabled" checked><span>轻点操作时尝试触感反馈</span></label>
-                <p class="caption">默认开启，仅在登录后主动轻点操作时尝试；不会在输入、键盘发送或后台回复时触发。iOS 不提供通用振动 API，按钮不能保证触感；可见开关的原生反馈由系统决定。</p>
+                <p class="caption">默认开启，仅在登录后轻点导航、发送、新建和确认类按钮时尝试；不会在输入、键盘发送或后台回复时触发。iOS 借助系统开关的原生反馈模拟触感，是否真正震动由系统设置决定。</p>
                 <div class="appearance-test"><button id="appearance-test" type="button">手动试一下</button><span id="appearance-test-status" class="caption" role="status" aria-live="polite"></span></div>
                 <p id="appearance-privacy" class="caption">名称与头像由你选择公开：未登录页面和 PWA 安装资源也可读取。请勿上传私密照片。iPhone 已安装图标或名称可能需要移除后重新添加到主屏幕；网页无法移除 iOS 原生键盘附件栏。</p>
-                <div class="actions"><button id="appearance-save" type="submit" class="primary" data-haptic>保存外观</button><button id="appearance-reset" type="button" class="quiet" data-haptic>恢复默认</button></div>
+                <div class="actions"><button id="appearance-save" type="submit" class="primary" data-haptic>保存外观</button><button id="appearance-reset" type="button" class="quiet">恢复默认</button></div>
               </fieldset>
               <div id="appearance-reset-confirm" class="appearance-reset-confirm" role="group" aria-labelledby="appearance-reset-title" hidden><p id="appearance-reset-title">恢复 Ferry 默认名称、图标和开启触感？未保存的外观草稿也会清除。</p><div class="actions"><button id="appearance-reset-cancel" type="button">取消</button><button id="appearance-reset-accept" type="button" class="danger-outline" data-haptic>确认恢复默认</button></div></div>
               <p id="appearance-status" class="caption" role="status" aria-live="polite"></p>

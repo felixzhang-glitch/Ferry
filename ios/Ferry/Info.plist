@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
+<key>CFBundleDisplayName</key><string>Ferry</string>
+<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+<key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+<key>LSRequiresIPhoneOS</key><true/>
+<key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
+<key>UILaunchScreen</key><dict/>
+<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+<key>NSHealthShareUsageDescription</key><string>仅在您手动同步时读取最近30天活动、心率、体重和血氧，上传到您确认的 Ferry 服务器。无可读取数据可能为空或未授权；不会写入健康数据。</string>
+<key>NSCalendarsFullAccessUsageDescription</key><string>仅为读取所选 Apple 日历前后30天的标题、列表与日期，并在您确认后手动上传。系统要求完整访问权限，但 Ferry 不创建、修改或删除事件，也不读取备注、位置或参与者。</string>
+<key>NSRemindersFullAccessUsageDescription</key><string>仅为读取所选列表未完成与最近30天已完成提醒的标题、列表、日期与完成状态，并在您确认后手动上传。不会创建、修改或删除提醒，也不读取备注或位置。</string>
+<key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><false/><key>NSAllowsArbitraryLoadsInWebContent</key><false/></dict>
+</dict></plist>

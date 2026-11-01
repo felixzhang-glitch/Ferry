@@ -187,6 +187,8 @@ class Settings(BaseSettings):
     dream_timeout_seconds: float = Field(default=600.0, validation_alias="DREAM_TIMEOUT_SECONDS")
     dream_max_transcript_chars: int = Field(default=40000, validation_alias="DREAM_MAX_TRANSCRIPT_CHARS")
     web_chat_store_dir: str = Field(default="./runtime/server/web-chat", validation_alias="WEB_CHAT_STORE_DIR")
+    device_data_store_dir: str = Field(default="./runtime/server/device-data", min_length=1,
+                                       validation_alias="DEVICE_DATA_STORE_DIR")
 
     mail_smtp_host: str = Field(default="smtp.163.com", validation_alias="MAIL_SMTP_HOST")
     mail_smtp_port: int = Field(default=465, validation_alias="MAIL_SMTP_PORT")

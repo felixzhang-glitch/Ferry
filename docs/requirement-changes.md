@@ -3,6 +3,107 @@
 > 本文件稳定维护：每次需求变化（新功能、行为调整、架构决策变更）在此追加一条记录。
 > 格式：日期 + 版本/提交 + 需求内容 + 影响范围。新记录添加在最上方。
 
+## 2026-11-01 · v0.14.0：iPhone 原生轻客户端公开发布
+
+- 需求：推送 GitHub 并发版，说明 iOS 支持；公开仓库不得带出敏感信息，同时保证使用者能在本机自己打包 iOS
+- 行为：应用版本升到 0.14.0。`ios/` 源码工程随仓库分发，只含 SwiftUI 源码、plist/entitlements/资源与共享 scheme；不含 Apple 账号、Team ID、证书、描述文件或构建产物，默认 Bundle ID `app.ferry.ios`，签名与 HealthKit capability 由使用者自己的 Team 完成
+- 文档：README 新增「iPhone 原生客户端」章节（支持范围、数据边界、macOS + Xcode 六步打包、HTTPS/反代要求、预签名包与真机验证边界）；`docs/ios.md` 保留完整验收清单；RELIABILITY 补设备副本目录与代理限额
+- 安全：本次改动集不含 `.env`、Token、密钥、签名资料与已同步设备数据；`.gitignore` 覆盖 `ios/build`、`DerivedData`、`xcuserdata`、`*.mobileprovision`、`*.p12`、`*.ipa`、`*.xcarchive`。公开仓库仍以「用户主动上传的设备数据不进版本库」为前提
+- 范围：本轮发布包含 10-23 起未发版改动（iOS 触感遮罩、对话列表收起、发送贴底、「回到最新消息」胶囊、PWA 冷启动顶部重测）、iOS 设备数据全链路（契约/存储/内部接口/观测网关/Swift 客户端）与 Garmin MCP 文档
+- 验证：设备数据专项 79 passed（契约/存储/主服务接口/观测鉴权）；preflight `--scope worktree` 对 171 个变更文件 0 ERROR；工程对象引用、plist/entitlements/资源 JSON 静态核对通过。本环境无 Xcode 与 Swift 工具链，未执行 `xcodebuild`，Swift 编译、签名、HealthKit/EventKit 真机授权与 iPhone 布局仍须 macOS 验收，不宣称已验证
+
+## 2026-10-30 · 接入佳明 Garmin Connect MCP
+
+- 需求：为 Ferry 配置佳明 MCP 服务端，让 pi 能读活动、睡眠、HRV、心率、步数、Body Battery、训练状态、体重体脂
+- 行为：服务端按社区项目 Taxuspt/garmin_mcp 以 `uv tool install` 安装到 `/root/.local/share/uv/tools/garmin-mcp`（入口 `/root/.local/bin/garmin-mcp`），用 `--overrides` 把 garminconnect 从项目钉死的 0.3.2 顶到 0.3.20；pi 全局配置 `~/.pi/agent/mcp.json` 注册 `garmin`（stdio、codemode、`GARMIN_IS_CN=true`、`GARMINTOKENS=/root/.garminconnect`、`GARMIN_TOOL_PROFILE=minimal,health` 收窄到 58 工具）；`rules/system.md` 增加调用指引与 token 失效处置；新增 `docs/references/garmin-mcp.md`
+- 范围：`~/.pi/agent/mcp.json`、`/root/.local/bin/garmin-auth`、`rules/system.md`（本地私有）、`docs/references/garmin-mcp.md`、`docs/index.md`、`docs/references/README.md`；Ferry 代码零改动（pi 启动未加 `--no-mcp`，Dream 一次性调用仍 `--no-mcp`）
+- 验证：`pi mcp list` → `garmin: connected, 58 tools`；`/data/tmp/garmin_probe.py` 以 pi 相同 env 走 stdio 完成 initialize + 58 工具列举，工具调用返回 `Garmin login failed`（token 未生成，符合预期）
+- 待办：token 需用户交互式认证（手机号/邮箱 + 密码 + 验证码，`garmin-auth`）后重启 Ferry，再跑探针确认真实取数
+
+## 2026-10-28 · iPhone 原生轻客户端与设备数据只读同步
+
+- 需求：优先适配 iPhone 17 Pro，聊天/设置/任务保留服务端；原生读取活动、心率、体重、血氧以及 Apple 日历/提醒事项，支持读即可。用户确认手动同步到自己的服务端，macOS 编译签名自行完成。
+- 行为：新增无第三方依赖的 SwiftUI/WKWebView Xcode 工程和原生设备数据页；健康最近30天，所选日历前后30天，提醒为所选列表全部未完成及近30天完成项。逐项授权、上传前确认、摘要/分页和二次确认清除服务端副本，不申请健康写入、不写日历/提醒、不导入 Ferry 调度、不做后台自动同步。
+- 隐私：仅 HTTPS、系统持久网页 Cookie + 原生短暂会话，内存 CSRF；观测只读 Bearer 无权读取设备数据，内部接口仅回环 + console Token。手机不持久缓存健康/日程，服务端独立私有目录，不进入观测、聊天或默认 pi 上下文；旧副本与备份仍需自行保护，文件权限不是加密。
+- 可靠性：有界批次/事务、幂等、原子快照及明确清除防迟到重生；空/拒绝/部分/完整读取均不隐式删除缺失历史。修复独立复核发现的时钟回退快照不可读、长 Unicode 分页超限；原生紧凑 JSON 不被服务端添加空字段撑爆批次，客户端留规范化余量。WebView 按会话代际重建且编译规则时不移除旧保护；部分活动指标无可读统计时标为 partial，不误当完整授权。
+- 范围：新增 `ios/`、`core/device_data_contract.py`、`app/device_data_store.py`/`device_data_api.py`、`observability/device_data.py`，增量接入主服务/网关、路径配置及 Nginx 模板；补充签名指南 `docs/ios.md`、安全/测试/索引和本地测试。保留原有未提交 PWA 修改，不修改私有配置、不部署/重启/提交；测试目录保持 gitignored，iOS 本机签名产物不入库。
+- 验证：契约独立复核通过；服务端专项79项通过，时钟/分页/紧凑批次回归先失败后修复通过，补充开启响应丢失后相同事务恢复。最终全量1677 passed / 2 failed / 61 skipped；修改前基线1598 passed / 2 failed / 61 skipped。两项最终失败与基线一致：SW 静态路由404及 pi 用量 `a-fork.jsonl` 的 `changedFiles` 断言（该断言在不同运行/参数下浮动，前一轮只有 SW 失败）。未扩展范围修复，不称全量全绿。
+- 验证：工程61个对象引用、源码/资源引用、scheme XML、plist/entitlements 与资源 JSON 静态核对；新增16项合成/mock XCTest但未执行，原生两项修复只做静态复核。本环境没有 Xcode/Apple SDK；Swift 编译、实际 WebKit 时序、签名、HealthKit/EventKit 权限和 iPhone 17 Pro 安全区/键盘/附件均须 macOS 真机验收，详见 `docs/ios.md`。
+
+## 2026-10-28 · 独立 PWA 冷启动有限重测顶部布局
+
+- 需求：普通浏览器访问顶部已稳定，但 iPhone 17 Pro 主屏幕 PWA 第一次进入仍偶发状态栏遮挡，切换底部导航后恢复；按冷启动布局延迟稳定的方向优化。
+- 分析：现有额外重测只在 document 非零滚动复位后触发，scrollY 为 0 的启动没有稳定采样窗口。视口数据、safe-area 或固定层绘制延迟是推断，尚未取得真实设备几何数据；不归因为机型特有问题，不硬编码灵动岛高度。
+- 行为：仅手机独立 PWA 进入聊天及恢复前台后在 100/300/700/1500ms 重测，首两次测量一致也不提前结束；采样复用 viewport/锚点/键盘机制，顶部计算 padding 和标题栏高度加入布局签名。离开聊天、注销或隐藏取消定时器，generation 防止旧会话回调；联网恢复不另开启动窗口。
+- 范围：`static/chat.js`、`static/sw.js`（`ferry-console-v19-pwa-launch-settle`）、本地 `tests/test_web_chat_ui.py`、`docs/functional-tests.md`；未修改 CSS、状态栏 meta 或私有配置，保留已有未提交改动；未部署、重启或提交。
+- 验证：新增冷启动无事件延迟稳定、前台恢复/历史位置/离开取消两项浏览器测试通过，配合发送贴底与键盘下 document 不复位两项均通过（4 tests）。仅在浏览器 mock 响应中禁用启动重测，冷启动回归用例失败；工作区文件不变。专项资源契约/启动恢复/缩放/复位/发送竞争 8 项通过；完整 Chromium 57 passed / 2 failed：键盘旧消息锚点偏差 6px（修改前已有）及 320px 胶囊间距等待失败（单独复跑通过，暂不能确认原因，不视为全绿）。全量系统 pytest 为 1597 passed / 3 failed / 61 skipped：`/static/sw.js` 404 和两项 pi 用量 changedFiles 断言，与本次冷启动优化前一轮结果的失败用例相同，未扩展范围修复；缺 Playwright 的浏览器用例已另行实际执行。实体 iPhone 冷启动仍待确认。
+
+## 2026-10-28 · 加固 PWA 顶部视口复位、发送消息后默认贴底
+
+- 需求：iPhone PWA 顶部会话标题偶尔被状态栏遮住一点（不是长标题横向截断）；发送消息后默认跳到最下面。
+- 行为：保留现有 `10px + safe-area-inset-top`，无键盘时 document 滚动复位后额外安排一帧重测 visualViewport，且在布局签名提前返回前调度，避免延迟归位的偏移残留；恢复前台也重新测量。真实 iOS 根因尚未真机确认，不以模拟测试宣称状态栏遮挡已完成验收。
+- 行为：普通发送通过校验后立即贴底，首次本地 accepted 渲染及清理原草稿/附件后再贴底一次；viewport 释放帧采用最新贴底意图，避免旧状态覆盖发送。用户之后主动上滚、重复 accepted、恢复订阅不会额外强制贴底；重试与输入修订保护保持原行为。
+- 范围：`static/chat.js`、`static/sw.js`（`ferry-console-v18-chat-viewport-follow`）、本地 `tests/test_web_chat_ui.py`（新增四项，测试目录仍不入库）、`docs/functional-tests.md`。保留原有未提交修改；未部署、未重启、未提交。
+- 验证：新增用例在代码修改前 3 failed / 1 passed，修改后四项均通过；覆盖历史位置发送、附件/多行输入收缩、viewport 释放竞争、重复 accepted/断流恢复不抢位置、无效发送不滚动、复位后延迟视口偏移。脚本 `node --check` 与 `git diff --check` 通过。
+- 验证：独立 Chromium 全量 55 passed / 2 failed；键盘锚点 6px 偏差在本次修改前 52 passed / 1 failed 的基线中已存在，触摸命令选择失败单独复跑通过。系统 Python 的全量 pytest 为 1597 passed / 3 failed / 59 skipped：`/static/sw.js` 404（历史记录已有）及两项 pi 用量 `changedFiles` 断言失败（本次未改用量模块，未取得完整修改前基线，不声称已确认是既有失败）。该环境缺 Playwright，浏览器用例另用 browser-check-env 实际执行。iPhone 顶部安全区、键盘与缓存更新待真机确认。
+
+## 2026-10-25 · 手机聊天页标题栏与状态栏留出间距
+
+- 需求：iPhone PWA 聊天页标题离顶部太近，概览页没有这个问题。
+- 原因：概览页顶栏上内边距是 `calc(10px + env(safe-area-inset-top))`；聊天页 `main` 用的是 `max(8px, env(safe-area-inset-top))`，在有安全区的 iPhone 上只剩安全区本身，标题紧贴状态栏下沿。
+- 行为：≤ 900px 时聊天页 `main` 上内边距改为 `calc(10px + env(safe-area-inset-top))`，与概览页一致；左右、底部内边距不变。
+- 范围：`static/dashboard.css`、`sw.js`（升到 `ferry-console-v17-chat-top-gap`）；本地测试 `tests/test_web_chat_ui.py`（SW 版本断言；静态契约断言聊天页上内边距）。未重启服务，静态文件按请求读取，已直接生效。
+- 验证：`tests/test_web_chat_ui.py`（含 Chromium）52 passed / 1 failed，失败为既有的键盘锚点偏移 6px。Chromium 没有安全区，实际间距需在实体 iPhone 上确认。
+
+## 2026-10-25 · 修复登录后首次进入聊天页标题栏被遮挡
+
+- 需求：iPhone PWA 登录后第一次进入聊天页，顶部标题栏容易被遮住；之后切换或刷新又正常。
+- 原因（推断，未在真机复现）：输入密码时软键盘把整个页面往上推，登录后键盘收起，页面的滚动位置却没有归零。手机聊天页是 `position: fixed` 全屏布局，iOS PWA 里这段残留的页面滚动会把固定定位的内容整体上移，标题栏就被压到了状态栏下面。原来的布局代码只处理了键盘弹出时的偏移，从来没把页面滚动复位。
+- 行为：`viewport()` 在手机聊天布局下、聊天输入框没有弹出键盘时，如果 `window.scrollY` 不为 0 就复位到 0；`window` 的 scroll 事件也会触发 `viewport()`；登录成功时先让当前焦点（密码框）失去焦点，让键盘尽早收起。聊天输入框弹出键盘时不复位，保留原有的键盘避让逻辑。
+- 范围：`static/chat.js`、`static/dashboard.js`、`sw.js`（升到 `ferry-console-v16-header-scroll`）；本地测试 `tests/test_web_chat_ui.py`（新增用例：独立 PWA 模式下制造 300px 残留滚动，断言会复位到 0、标题栏在可视区内；键盘弹出时滚动保持不变）。未重启服务，静态文件按请求从磁盘读取，已直接生效。
+- 验证：新用例在去掉复位逻辑时失败，恢复后通过。全量 pytest（含 Chromium）1653 passed / 2 failed，均为既有问题：`/static/sw.js` 404，以及键盘锚点偏移 6px。Chromium 不会出现 iOS 那种固定定位偏移，所以标题栏是否真的不再被遮挡，需要在实体 iPhone 上确认。
+
+## 2026-10-25 · 修复「回到最新消息」胶囊偶发悬在正文中段
+
+- 需求：iPhone PWA 聊天页上滚后，「回到最新消息 ↓」偶尔浮在滚动区中段、压住正文，切几次按钮或刷新后恢复。实测胶囊底边距视口底 209pt，比设计值（composer 60 + 12 = 72pt）高 137pt。
+- 原因：`#chat-bottom` 的 `bottom` 由 `viewport()` 写入 composer 高度 + progress 高度 + 12px，但 `viewport()` 只在 resize/visualViewport/orientationchange 时才完整重算。带附件或多行文字发送后，附件 chips 被移除、进度文字清空，composer 缩回单行，过程中没有任何 resize 事件，`bottom` 便一直停在发送时的大值（约 189 + 12）上。另外，签名里没有 `chat-progress` 高度。
+- 行为：用 `ResizeObserver` 监听 `#chat-composer` 和 `#chat-progress`，尺寸一变就走 `viewport()`；签名补上 progress 高度。胶囊始终贴在 composer 上方 12px，原有的贴底和旧消息锚点逻辑不变。
+- 范围：`static/chat.js`、`sw.js`（升到 `ferry-console-v15-bottom-pill`）；本地测试 `tests/test_web_chat_ui.py`（SW 版本断言；320px 用例插入 80px 探针撑高 composer、再移除，断言胶囊 bottom 两次都跟随，且全程不触发 resize）。未部署或重启服务。
+- 验证：新断言在撤掉 ResizeObserver 时失败，恢复后通过。全量 pytest（含 Chromium）1652 passed / 2 failed，均为既有问题：`/static/sw.js` 404，以及键盘锚点偏移 6px。`stream_chunk_boundaries` 在一次全量运行中偶发失败，单跑 3 次均通过。实体 iPhone 待用户确认。
+
+## 2026-10-24 · 桌面对话列表默认收起、悬停显示展开按钮
+
+- 需求：电脑打开控制台聊天页时，对话列表默认收起；鼠标移到对应位置时出现图标，用来展开和收起。
+- 行为：> 900px 时 `#view-chat` 默认 `data-threads="collapsed"`，列表列宽收到 0 且 `visibility:hidden`（不可 Tab 聚焦）。收起时，悬停热区在 main 左侧内边距内，不遮挡聊天内容；展开后，热区位于列表右边框。悬停热区或列表时显示 28px 圆形箭头按钮，键盘聚焦时也显示。点按切换展开/收起，同步 `aria-expanded` 和标签。状态只保存在当前页面，刷新后回到收起，不写入浏览器存储。桌面隐藏聊天头里打开模态抽屉的按钮，避免两套入口；≤ 900px 行为不变（头部按钮 + 抽屉 + 滑动手势）。展开和收起带 0.2s 过渡，`prefers-reduced-motion` 下关闭。
+- 范围：`static/dashboard.html`、`dashboard.css`、`chat.js`、`sw.js`（升到 `ferry-console-v14-threads-collapse`）；本地测试 `tests/test_web_chat_ui.py`（setUp 先展开列表；新增默认收起、悬停显隐、展开后切换会话、移动端隐藏用例；桌面宽度下聊天头断言改为抽屉按钮隐藏）。未部署或重启服务。
+- 验证：全量 pytest（含 Chromium）1651 passed / 3 failed。失败项 `/static/sw.js` 404 和键盘锚点偏移 6px 为既有问题；`touch_command_menu` 偶发失败，撤掉本次改动后同样偶发，与本次无关。1360px 收起、悬停、展开和 1000px 深色截图已查看。
+
+## 2026-10-23 · 消息复制按钮加触感
+
+- 需求：PWA 聊天里点消息的复制按钮没有触感，用户要求加上。
+- 行为：`.chat-copy` 加入触感白名单。iOS 上由 MutationObserver 给随回复动态生成的复制按钮挂透明 label 遮罩；其他设备走 `navigator.vibrate`。复制本身仍在同一次点击里执行，触感开关关闭时同样不震。
+- 范围：`static/appearance.js`（ACTIONS 白名单）、`sw.js`（升到 `ferry-console-v13-copy-haptic`）；本地测试 `tests/test_web_chat_ui.py`（SW 版本断言、iPhone UA 用例断言复制按钮带遮罩）。未部署或重启服务。
+- 验证：`conf` 下全量 pytest 1597 passed / 53 skipped / 3 failed（既有 `/static/sw.js` 404 和 pi_usage fork 修正 2 项）；Chromium 浏览器用例 367 passed，唯一失败为既有键盘锚点偏移 6px。实体 iPhone 触感尚待确认。
+
+## 2026-10-23 · 聊天复制位置与空会话新建限制
+
+- 需求：消息复制按钮略向左下移动，使布局更协调；当前会话没有消息时不能连续新建空会话。
+- 行为：复制按钮左移 4px、下移 2px，保留 44px 热区；桌面、手机头部和抽屉的新建入口共享空会话判断与提示，函数入口亦拦截。草稿和未发送附件不算消息；实际消息被接收后（含仅附件）即可新建，不必等待回复结束。无会话时可首次创建；加载期间禁用，创建锁覆盖打开新会话的交接过程。
+- 范围：仅控制台前端，不删除旧空会话、不改变后端会话规则；修改 `static/chat.js`、`dashboard.css`、`sw.js`（v12），补充本地 UI 测试与功能回归清单。未部署或重启服务。
+- 本地验证：新增/重点浏览器边界 7 项与静态契约 3 项通过；完整聊天 UI 51 项中 49 项通过，初始化超时项单独复跑通过，键盘锚点偏移 6px 用 HEAD 资源复现为既有失败。聊天存储/服务/基础/代理 257 项通过；全量 pytest 为 1599 passed / 53 skipped / 1 failed（既有 `/static/sw.js` 路由 404，服务实际使用 `/observability/sw.js`）；桌面及 390px 深色/320px 浅色截图已查看，无裁切、浏览器无异常。JavaScript 语法与差异格式检查通过，实体 iPhone 尚未验证。
+
+## 2026-10-23 · PWA 主要操作触感（iOS 透明 label 覆盖原生开关）
+
+- 需求：设置页原生触感开关有震感，其他按钮没有；用户要求导航、发送、新建、确认这几类主要操作也有相同触感，其余按钮保持安静。
+- 原因：原生 `<input type="checkbox" switch>` 的震感由 iOS 系统提供；按钮走的是 `navigator.vibrate`，而 iOS Safari/PWA 没有这个接口。
+- 第一版（当天上线后失败）：用程序 `label.click()` 去点屏幕外的隐藏开关。用户真机反馈所有按钮依旧没有震感。查证 ios-haptics 库得知，Apple 在 iOS 26.5 修补了程序点击触发触感的做法，只有用户真实点到开关才会震。
+- 现方案：仅在 iOS 上，给每个主要操作按钮内部加一层透明 `<label class="haptic-overlay">`，覆盖整个按钮，并关联一个 1px、`visibility:hidden` 的原生开关。手指实际点到 label，Safari 把它当作用户切换了开关，从而播放系统触感；开关本身不在手指下，从按钮上开始的滚动不受影响。按钮动态创建或 `textContent` 被重写时，由 MutationObserver 每帧补挂一次。非 iOS 设备仍走 `navigator.vibrate`，不加遮罩层。
+- 推翻 10-22 记录里“可见开关不充当隐藏马达代理”的决定。
+- 行为边界：白名单为 `[data-nav]`、`[data-tab]`、会话列表项、打开对话列表、发送/重试、三个新建入口、对话与通用确认弹窗，以及带 `data-haptic` 的保存外观和确认恢复默认，另加“手动试一下”。刷新、移除头像、删除、附件等按钮不震。设置关闭或未登录时，根元素为 `data-haptics="off"`，遮罩层隐藏；禁用或 `aria-disabled` 的按钮不显示遮罩层。键盘 Enter 不经过遮罩层，不震；原生开关本身不重复触发。遮罩层设 `aria-hidden`，开关 `tabindex=-1`、不带 name，不参与提交。
+- 提交兼容：WebKit 可能让 label 接管点击，导致提交按钮自身的表单提交被跳过（Chromium 实测照常提交）。点击结束后，如果该表单在这次点击里没有提交过，且点击没被取消、按钮仍可用，就补调一次 `requestSubmit(按钮)`，因此在两种引擎上都只提交一次。
+- 影响文件：`static/appearance.js`、`dashboard.html`（说明文案，移除非主要按钮的 `data-haptic`）、`dashboard.css`（遮罩层与隐藏开关样式）、`sw.js`（升到 `ferry-console-v11-haptics-overlay`）；本地测试 `tests/test_web_chat_ui.py`（桌面振动路径，以及模拟 iPhone UA 的遮罩层、单次提交、焦点保持和补挂用例）。
+- 验证：全量 pytest（含 Chromium）1646 passed、9 subtests passed，4 failed 均为已有问题（`/static/sw.js` 404、pi_usage 的 fork 修正、键盘锚点偏移 6px，在 HEAD 上同样失败）；模拟 iPhone UA 截图确认遮罩层不可见、布局不变。Chromium 无法播放 iOS 触感，自动化只能证明遮罩层存在且点击会切换开关；真机触感，以及 WebKit 下提交是否只发生一次，需要用户在 iPhone 上确认。
+
 ## 2026-10-22 · v0.13.0：README 重写与公开发布隐私收口
 
 - README 按当前 PWA／飞书／微信、独立控制台、统一模型、NOTE-FORMAT／Dream 与通知功能重写，明确安装配置、私有规则和业务数据边界；应用版本同步为 0.13.0。

@@ -142,8 +142,11 @@ class SecurityBoundary:
         avatar_upload = scope.get("method") == "PUT" and path == API + "/chat/appearance/avatar"
         upload = avatar_upload or (scope.get("method") == "PUT" and re.fullmatch(
             r"/api/observability/v1/chat/threads/[a-f0-9]{32}/attachments/[a-f0-9]{32}/content", path))
-        limit = (2 * 1024 * 1024 if avatar_upload else MAX_UPLOAD_BYTES) if upload else (MAX_CHAT_JSON_BYTES if path.endswith("/turns")
-                                                 and path.startswith(API + "/chat/") else MAX_BODY)
+        from app.device_data_api import batch_route
+        from core.device_data_contract import MAX_BATCH_BYTES
+        device_batch = batch_route(scope.get("method", ""), path)
+        limit = MAX_BATCH_BYTES if device_batch else ((2 * 1024 * 1024 if avatar_upload else MAX_UPLOAD_BYTES) if upload else (MAX_CHAT_JSON_BYTES if path.endswith("/turns")
+                                                 and path.startswith(API + "/chat/") else MAX_BODY))
         if length > limit:
             await reject(413, "请求体过大" if limit != MAX_BODY else "请求体不得超过 4KB")
             return
@@ -449,6 +452,7 @@ def create_app(settings: ObservabilitySettings | None = None) -> FastAPI:
     application.state.usage_refresh_at = float("-inf")
     application.state.usage_refresh_failed = False
     application.state.console_client = lambda: httpx.AsyncClient(timeout=8.0)
+    application.state.device_data_client = lambda: httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0), trust_env=False)
     application.state.chat_client = lambda: httpx.AsyncClient(timeout=httpx.Timeout(700.0, connect=5.0))
 
     @application.exception_handler(RequestValidationError)
@@ -558,6 +562,10 @@ def create_app(settings: ObservabilitySettings | None = None) -> FastAPI:
             require_session_csrf(request, settings.console_token, purpose="console",
                                  check_origin=lambda: _check_origin(request, settings),
                                  logger=logging.getLogger(__name__))
+
+    from observability.device_data import build_router as build_device_data_router
+    application.include_router(build_device_data_router(
+        settings, require_console, lambda: application.state.device_data_client()))
 
     async def forward(method: str, path: str, payload: dict | None = None):
         url = settings.console_upstream.rstrip("/") + "/internal/console" + path

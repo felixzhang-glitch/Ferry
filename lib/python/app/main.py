@@ -43,7 +43,7 @@ console_overrides = console.load_overrides(settings)
 setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Ferry", version="0.13.0")
+app = FastAPI(title="Ferry", version="0.14.0")
 
 session_manager = SessionManager()
 deduplicator = MessageDeduplicator(ttl_seconds=settings.deduplicate_ttl_seconds)
@@ -201,6 +201,12 @@ def _chat_token() -> str:
 
 app.include_router(build_console_router(console_service, _console_token))
 app.include_router(build_chat_router(web_chat_service, _chat_token))
+
+from app.device_data_api import build_router as build_device_data_router
+from app.device_data_store import DeviceDataStore
+
+app.state.device_data_store = None
+app.include_router(build_device_data_router(lambda: app.state.device_data_store, _console_token))
 
 
 @app.get("/healthz")
@@ -441,6 +447,12 @@ async def startup_event() -> None:
     except Exception:
         logger.warning("observability disabled: invalid configuration")
     memory.ensure_workspace(settings)
+    if _console_token():
+        try:
+            app.state.device_data_store = await asyncio.to_thread(DeviceDataStore, settings.device_data_store_dir)
+        except Exception:
+            app.state.device_data_store = None
+            logger.warning("device data storage unavailable")
     if _chat_token():
         try:
             web_chat_service.store = await asyncio.to_thread(WebChatStore, settings.web_chat_store_dir)
@@ -475,6 +487,7 @@ async def startup_event() -> None:
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
+    app.state.device_data_store = None
     # Gate the WS thread before closing the agent: late events would otherwise
     # hit an already-closed client and answer with transport errors.
     ws = getattr(app.state, "feishu_ws", None)

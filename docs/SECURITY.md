@@ -26,6 +26,14 @@
 - App 外观设置：只认有效登录 Cookie + 会话 CSRF；名称/触感/头像使用单独严格接口，不能写任意模型配置。名称与图标刻意公开给登录页和 PWA 安装资源，不宜填写敏感资料；头像只收 PNG/JPEG/WebP bytes（≤2MiB），实际解码限制尺寸/像素、拒绝动画/SVG、重采样为无元数据 PNG，用固定路由与有界版本提供；不接受路径或外链，不进入 Pi 环境或聊天历史
 - 邮件推送：163 SMTP SSL；授权码在发送时才从 `MAIL_ENV_FILE`（默认 `~/.env/smtp-mail-assistant.env`）读取，不进主服务进程环境（pi 子进程继承的是主服务环境）；SMTP 报错不回显服务器原文；收件人只能从 `MAIL_RECIPIENTS` 中选
 
+## iOS 设备数据边界
+
+- 健康、Apple 日历/提醒数据是用户主动上传的独立业务数据，不属于观测白名单；只允许登录 Cookie 查询，写操作要求绑定会话 console CSRF，观测只读 Bearer 不可读取。内部设备接口仅回环 + 控制台 Token；批次专用限额不扩大普通控制台 4KB 写面。
+- 手机仅 HTTPS、验证证书与固定来源，不提供任意 JavaScript 原生桥，不保存密码/内部 Token/健康持久缓存。登出、登录失效、切站及进入后台取消同步；Apple 授权接口是只读调用，不修改设备上的日历、提醒或健康数据。
+- 服务端 `runtime/server/device-data/` 使用 0700/0600、严格有界结构和原子存储，不进入 telemetry、Prometheus、聊天、memory/Dream 或默认 pi 提示词。文件权限不等于加密；同一 OS 用户运行的工具仍可能读取，需信任部署主机及执行身份，备份另行保护。
+- 空结果/权限拒绝/部分结果不隐式抹除旧数据；缺失条目可能是旧副本，不保证反映当前设备。用户显式清除副本时废弃旧事务，迟到提交不可恢复数据；该动作不删除手机原件。Apple 提醒不导入 Ferry 自动提醒调度。
+- 真机签名与授权、SDK 构建仍须用户在 macOS 验证，详见 [ios.md](ios.md)；不能通过移除 HealthKit entitlement、放宽证书或鉴权来规避配置问题。
+
 ## 数据安全
 
 - 敏感数据清单：`conf/.env`（飞书 / 微信凭证、模型 API key）、`conf/.env.observability`（观测密码哈希、只读 / 上报 / 控制台 Token、HMAC key，0600）、`~/.env/smtp-mail-assistant.env`（邮件授权码，0600）、`rules/admin.md`（管理员 user_id 等）、`secret-allowlist.local.txt`（扫描白名单，gitignored）、`conf/wechat/account.json`

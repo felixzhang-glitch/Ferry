@@ -15,3 +15,4 @@
 | [pi-cli.txt](pi-cli.txt) | pi（Pi Coding Agent），唯一后端 |
 | `feishu-bot-api.md` | 飞书机器人开放平台 |
 | `wechat-ilink.md` | 微信 iLink Bot sidecar |
+| `garmin-mcp.md` | 佳明 Garmin Connect MCP（健康数据接入 pi） |

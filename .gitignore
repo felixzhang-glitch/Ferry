@@ -23,5 +23,14 @@ node_modules/
 !/memory/README.md
 .DS_Store
 .reasonix/
+# iOS 本机产物与个人签名资料，不随原生工程分发
+/ios/build/
+/ios/DerivedData/
+/ios/**/xcuserdata/
+/ios/**/*.xcuserstate
+/ios/**/*.mobileprovision
+/ios/**/*.p12
+/ios/**/*.ipa
+/ios/**/*.xcarchive/
 # 测试目录只留本地，不随仓库分发（夹具里有假密钥字面量；本地跑 pytest 不受影响）
 tests/

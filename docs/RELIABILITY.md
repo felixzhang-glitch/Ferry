@@ -12,9 +12,10 @@
 - v0.13.0 起 `rules/system.md` 不再随源码发布；升级时先保留本机规则副本，Git 更新可能移除旧跟踪路径，需恢复到被忽略的同名位置。新克隆按需创建本地 system/admin 规则，缺失时提示并跳过，不自动生成个人规则
 
 - App 外观单独持久化在 `OBSERVABILITY_STORE_DIR/appearance/`，包括 0600 状态与归一化图标版本；变更原子提交，不存原始照片。与观测数据一起备份；坏状态不自动覆盖，读页面可回默认外壳，修改接口明确报错。新增 Pillow 用于安全解码图像，不依赖外部图片服务
-- 自定义名称/图标不改变 manifest 的 id/scope/start_url。既有 iPhone 桌面安装可能不自动更新图标/名称，需要用户重新添加；开关触感不能保证各 iOS 版本或系统设置下有震动
+- 自定义名称/图标不改变 manifest 的 id/scope/start_url。既有 iPhone 桌面安装可能不自动更新图标/名称，需要用户重新添加；主要操作的触感在 iOS 上依赖按钮内的透明 label 覆盖隐藏原生开关，并受系统触感设置影响，属于平台行为，将来的系统更新可能使其失效
 - PWA 外壳升级不缓存 API／附件；更新后重新打开页面取得当前会话的控制台 CSRF。旧页面缺令牌时提示刷新，不自动重放写操作或强刷丢草稿。纯文本聊天输入旨在减少 iOS 表单辅助栏，是否隐藏及键盘间距必须使用目标 iPhone 和输入法验收，不能由 Chromium 模拟结果代替
 - `./bin/server obs credentials ensure` 补齐独立 `OBSERVABILITY_CHAT_TOKEN`，不改登录密码；主服务与观测进程重启后生效。聊天数据默认 `runtime/server/web-chat/`，改路径用 `WEB_CHAT_STORE_DIR`；与 Pi 原生 transcript/映射一起备份，聊天 UI 历史不是 Pi 上下文恢复的替代品
+- iOS 设备副本默认 `runtime/server/device-data/`（改路径用 `DEVICE_DATA_STORE_DIR`），0700/0600，与观测事件、聊天、memory/Dream 分离，不自动注入 pi。按分项保留旧记录，达到预算时提交被拒；需备份时单独打包该目录，恢复后仍按原设备标识查询。代理须按 `conf/nginx-observability.locations.conf` 放行 `/api/observability/v1/device-data/` 的 256KiB 并屏蔽 `/internal/device-data/`，旧 snippet 不更新时大批次会 413
 - JSON 控制配置维持 4KB；聊天 turn 为 64KiB，附件每个 10MiB，Web turn 最长 600 秒；NDJSON 每 15 秒 heartbeat，代理 read timeout 700 秒。部署时需同步新版 nginx snippet，启用 chat 专用流式 location，并显式屏蔽 `/internal/chat/`
 - 刷新/切换线程/断网只解除订阅，原 turn 在服务端继续；重新打开通过 active + events 取完整快照/序号恢复，不自动重发提示词。Stop、注销、删除、超时和主服务退出仍取消；重启后的在途轮次标 interrupted，不承诺续算。没有离线发送队列
 - PWA、飞书、微信及 Web 每日任务共享 `PI_MODEL/PI_THINKING` 与控制台持久化覆盖；`WEB_PI_MODEL/WEB_PI_THINKING` 已移除，私有配置中残留值不再生效。设置修改与恢复默认从下一轮生效，当前轮及其自动重试保持进入时的参数；Dream 独立模型不变。最终显示与持久化使用成功轮次末条 assistant text，不拼接工具前正文；旧污染历史不自动删除

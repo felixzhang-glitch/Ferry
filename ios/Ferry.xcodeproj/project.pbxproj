@@ -1,0 +1,127 @@
+// !$*UTF8*$!
+{
+ archiveVersion = 1;
+ classes = {};
+ objectVersion = 56;
+ objects = {
+  A00000000000000000000001 = {isa = PBXBuildFile; fileRef = B00000000000000000000001; };
+  A00000000000000000000002 = {isa = PBXBuildFile; fileRef = B00000000000000000000002; };
+  A00000000000000000000003 = {isa = PBXBuildFile; fileRef = B00000000000000000000003; };
+  A00000000000000000000004 = {isa = PBXBuildFile; fileRef = B00000000000000000000004; };
+  A00000000000000000000005 = {isa = PBXBuildFile; fileRef = B00000000000000000000005; };
+  A00000000000000000000006 = {isa = PBXBuildFile; fileRef = B00000000000000000000006; };
+  A00000000000000000000007 = {isa = PBXBuildFile; fileRef = B00000000000000000000007; };
+  A00000000000000000000008 = {isa = PBXBuildFile; fileRef = B00000000000000000000008; };
+  A00000000000000000000009 = {isa = PBXBuildFile; fileRef = B00000000000000000000009; };
+  A0000000000000000000000A = {isa = PBXBuildFile; fileRef = B0000000000000000000000A; };
+  A0000000000000000000000B = {isa = PBXBuildFile; fileRef = B0000000000000000000000B; };
+  A0000000000000000000000C = {isa = PBXBuildFile; fileRef = B0000000000000000000000C; };
+  A0000000000000000000000D = {isa = PBXBuildFile; fileRef = B0000000000000000000000D; };
+  A0000000000000000000000E = {isa = PBXBuildFile; fileRef = B0000000000000000000000E; };
+  A0000000000000000000000F = {isa = PBXBuildFile; fileRef = B0000000000000000000000F; };
+  A00000000000000000000010 = {isa = PBXBuildFile; fileRef = B00000000000000000000010; };
+  B00000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FerryApp.swift; sourceTree = "<group>"; };
+  B00000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleWebView.swift; sourceTree = "<group>"; };
+  B00000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConsoleSession.swift; sourceTree = "<group>"; };
+  B00000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthReader.swift; sourceTree = "<group>"; };
+  B00000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventKitReader.swift; sourceTree = "<group>"; };
+  B00000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceDataModels.swift; sourceTree = "<group>"; };
+  B00000000000000000000007 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSyncClient.swift; sourceTree = "<group>"; };
+  B00000000000000000000008 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceDataView.swift; sourceTree = "<group>"; };
+  B00000000000000000000009 = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+  B0000000000000000000000A = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+  B0000000000000000000000B = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FerryTests.swift; sourceTree = "<group>"; };
+  B0000000000000000000000C = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = HealthKit.framework; path = System/Library/Frameworks/HealthKit.framework; sourceTree = SDKROOT; };
+  B0000000000000000000000D = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = EventKit.framework; path = System/Library/Frameworks/EventKit.framework; sourceTree = SDKROOT; };
+  B0000000000000000000000E = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+  B0000000000000000000000F = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+  B00000000000000000000010 = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CryptoKit.framework; path = System/Library/Frameworks/CryptoKit.framework; sourceTree = SDKROOT; };
+  B00000000000000000000011 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+  B00000000000000000000012 = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Ferry.entitlements; sourceTree = "<group>"; };
+  B00000000000000000000013 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ferry.app; sourceTree = BUILT_PRODUCTS_DIR; };
+  B00000000000000000000014 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FerryTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+  C00000000000000000000001 = {isa = PBXGroup; children = (C00000000000000000000002, C00000000000000000000003, C00000000000000000000004, C00000000000000000000005); sourceTree = "<group>"; };
+  C00000000000000000000002 = {isa = PBXGroup; path = Ferry; sourceTree = "<group>"; children = (B00000000000000000000001, B00000000000000000000002, B00000000000000000000003, B00000000000000000000004, B00000000000000000000005, B00000000000000000000006, B00000000000000000000007, B00000000000000000000008, B00000000000000000000009, B0000000000000000000000A, B00000000000000000000011, B00000000000000000000012); };
+  C00000000000000000000003 = {isa = PBXGroup; path = FerryTests; sourceTree = "<group>"; children = (B0000000000000000000000B); };
+  C00000000000000000000004 = {isa = PBXGroup; name = Frameworks; sourceTree = "<group>"; children = (B0000000000000000000000C, B0000000000000000000000D, B0000000000000000000000E, B0000000000000000000000F, B00000000000000000000010); };
+  C00000000000000000000005 = {isa = PBXGroup; name = Products; sourceTree = "<group>"; children = (B00000000000000000000013, B00000000000000000000014); };
+  D00000000000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000001, A00000000000000000000002, A00000000000000000000003, A00000000000000000000004, A00000000000000000000005, A00000000000000000000006, A00000000000000000000007, A00000000000000000000008); runOnlyForDeploymentPostprocessing = 0; };
+  D00000000000000000000002 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A0000000000000000000000C, A0000000000000000000000D, A0000000000000000000000E, A0000000000000000000000F, A00000000000000000000010); runOnlyForDeploymentPostprocessing = 0; };
+  D00000000000000000000003 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000009, A0000000000000000000000A); runOnlyForDeploymentPostprocessing = 0; };
+  D00000000000000000000004 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A0000000000000000000000B); runOnlyForDeploymentPostprocessing = 0; };
+  D00000000000000000000005 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+  D00000000000000000000006 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+  E00000000000000000000001 = {isa = PBXNativeTarget; buildConfigurationList = F00000000000000000000002; buildPhases = (D00000000000000000000001, D00000000000000000000002, D00000000000000000000003); buildRules = (); dependencies = (); name = Ferry; productName = Ferry; productReference = B00000000000000000000013; productType = "com.apple.product-type.application"; };
+  E00000000000000000000002 = {isa = PBXNativeTarget; buildConfigurationList = F00000000000000000000003; buildPhases = (D00000000000000000000004, D00000000000000000000005, D00000000000000000000006); buildRules = (); dependencies = (E00000000000000000000003); name = FerryTests; productName = FerryTests; productReference = B00000000000000000000014; productType = "com.apple.product-type.bundle.unit-test"; };
+  E00000000000000000000003 = {isa = PBXTargetDependency; target = E00000000000000000000001; targetProxy = E00000000000000000000004; };
+  E00000000000000000000004 = {isa = PBXContainerItemProxy; containerPortal = E00000000000000000000005; proxyType = 1; remoteGlobalIDString = E00000000000000000000001; remoteInfo = Ferry; };
+  E00000000000000000000005 = {
+   isa = PBXProject;
+   attributes = {BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; TargetAttributes = {
+    E00000000000000000000001 = {CreatedOnToolsVersion = 16.0; SystemCapabilities = {com.apple.HealthKit = {enabled = 1; }; }; };
+    E00000000000000000000002 = {CreatedOnToolsVersion = 16.0; TestTargetID = E00000000000000000000001; };
+   }; };
+   buildConfigurationList = F00000000000000000000001;
+   compatibilityVersion = "Xcode 14.0";
+   developmentRegion = zh_CN;
+   hasScannedForEncodings = 0;
+   knownRegions = (zh_CN, en, Base);
+   mainGroup = C00000000000000000000001;
+   productRefGroup = C00000000000000000000005;
+   projectDirPath = "";
+   projectRoot = "";
+   targets = (E00000000000000000000001, E00000000000000000000002);
+  };
+  F00000000000000000000001 = {isa = XCConfigurationList; buildConfigurations = (F00000000000000000000004, F00000000000000000000005); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+  F00000000000000000000002 = {isa = XCConfigurationList; buildConfigurations = (F00000000000000000000006, F00000000000000000000007); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+  F00000000000000000000003 = {isa = XCConfigurationList; buildConfigurations = (F00000000000000000000008, F00000000000000000000009); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+  F00000000000000000000004 = {isa = XCBuildConfiguration; name = Debug; buildSettings = {
+   CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; SDKROOT = iphoneos;
+   IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+   SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; DEBUG_INFORMATION_FORMAT = dwarf;
+   GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "$(inherited)"); ENABLE_TESTABILITY = YES;
+   ONLY_ACTIVE_ARCH = YES;
+  }; };
+  F00000000000000000000005 = {isa = XCBuildConfiguration; name = Release; buildSettings = {
+   CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; SDKROOT = iphoneos;
+   IPHONEOS_DEPLOYMENT_TARGET = 17.0; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = "-O";
+   SWIFT_COMPILATION_MODE = wholemodule; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+   ENABLE_NS_ASSERTIONS = NO;
+  }; };
+  F00000000000000000000006 = {isa = XCBuildConfiguration; name = Debug; buildSettings = {
+   PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = app.ferry.ios;
+   INFOPLIST_FILE = Ferry/Info.plist; GENERATE_INFOPLIST_FILE = NO;
+   CODE_SIGN_ENTITLEMENTS = Ferry/Ferry.entitlements; CODE_SIGN_STYLE = Automatic;
+   CURRENT_PROJECT_VERSION = 1; MARKETING_VERSION = 1.0; TARGETED_DEVICE_FAMILY = 1;
+   SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO;
+   ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+   LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+  }; };
+  F00000000000000000000007 = {isa = XCBuildConfiguration; name = Release; buildSettings = {
+   PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = app.ferry.ios;
+   INFOPLIST_FILE = Ferry/Info.plist; GENERATE_INFOPLIST_FILE = NO;
+   CODE_SIGN_ENTITLEMENTS = Ferry/Ferry.entitlements; CODE_SIGN_STYLE = Automatic;
+   CURRENT_PROJECT_VERSION = 1; MARKETING_VERSION = 1.0; TARGETED_DEVICE_FAMILY = 1;
+   SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO;
+   ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+   LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+  }; };
+  F00000000000000000000008 = {isa = XCBuildConfiguration; name = Debug; buildSettings = {
+   PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = app.ferry.ios.tests;
+   GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_STYLE = Automatic;
+   TARGETED_DEVICE_FAMILY = 1; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+   TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ferry.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Ferry";
+   BUNDLE_LOADER = "$(TEST_HOST)";
+   LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks");
+  }; };
+  F00000000000000000000009 = {isa = XCBuildConfiguration; name = Release; buildSettings = {
+   PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = app.ferry.ios.tests;
+   GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_STYLE = Automatic;
+   TARGETED_DEVICE_FAMILY = 1; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+   TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ferry.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Ferry";
+   BUNDLE_LOADER = "$(TEST_HOST)";
+   LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks");
+  }; };
+ };
+ rootObject = E00000000000000000000005;
+}

@@ -13,6 +13,7 @@ Ferry 会注入本地规则、长期记忆和当前时间，但不另造一套�
 ```mermaid
 flowchart LR
     PWA["PWA · 浏览器聊天"] --> F
+    IOS["iPhone · SwiftUI 轻壳<br/>控制台 + 只读设备数据"] --> F
     FS["飞书 · WebSocket 长连接"] --> F
     WX["微信 · Node.js iLink sidecar"] --> F
     F["Ferry · Python / FastAPI<br/>会话 · 附件 · 命令 · 调度"] --> W
@@ -35,6 +36,7 @@ PWA 与控制台由独立的观测进程提供，聊天和控制请求转发到�
 - **记忆与调度**：NOTE-FORMAT 长期记忆、Dream 离线整理与报告、一次性提醒、每日任务；配置邮件后也可投送报告和每日任务。
 - **通知与外观**：用户主动授权后接收 PWA 回复、提醒和每日任务通知；可设置 App 名称、图标和外观，跟随系统明暗。
 - **独立控制台**：管理模型、记忆整理和定时任务，查看运行监控与 pi 历史 Token 用量；不是只有只读图表。
+- **iPhone 原生轻壳**：`ios/` 内置 SwiftUI 工程，聊天、设置与任务仍走服务端，原生页面只做手动触发、只读的 Apple 健康/日历/提醒同步；源码分发，签名由使用者本机完成。
 
 ## 快速开始
 
@@ -109,6 +111,25 @@ supervisorctl restart ferry-observability # 仅独立控制台需要更新时
 
 若补齐了主服务与控制台共用的令牌，两者都需重新加载，微信无需因此重启。
 HTTPS、反向代理和完整托管说明见[运维文档](docs/RELIABILITY.md)；`/healthz` 只证明 HTTP 存活，不代表模型或渠道正常。
+
+## iPhone 原生客户端
+
+`ios/` 是可选的 iPhone 轻壳，最低 iOS 17，只支持 iPhone。聊天、设置和定时任务仍由服务端执行，原生页面只做手动触发的只读同步：最近 30 天活动/心率/体重/血氧、所选日历前后 30 天、所选提醒列表的未完成项与近 30 天完成项。不申请健康写入，不修改或删除设备上的日历与提醒，Apple 提醒不会自动变成 Ferry 定时任务。PWA 仍可独立使用，网页读不到健康库。
+
+仓库只含源代码：没有 Apple 账号、Team ID、证书、provisioning profile、签名产物或已同步的数据；Bundle ID 默认 `app.ferry.ios`，签名信息由使用者在本机填写，不入库。健康数据需要 App ID 允许 HealthKit，免费 Personal Team 未必支持，必要时使用 Apple Developer Program 的 Team。
+
+本机打包（macOS + Xcode，工程已自带共享 `Ferry` scheme，无第三方依赖）：
+
+1. 克隆仓库，Xcode 打开 `ios/Ferry.xcodeproj`。
+2. Xcode → Settings → Accounts 登录自己的 Apple ID。
+3. App target → Signing & Capabilities：保持 Automatically manage signing，选择自己的 Team，把 `PRODUCT_BUNDLE_IDENTIFIER` 改成自己唯一的反向域名；测试 target 同样选择 Team。
+4. 确认 HealthKit capability 与 `Ferry.entitlements` 一致，且未启用 Background Delivery；`Info.plist` 里健康只读、日历/提醒完整访问的说明文案保持存在。签名报 capability 不被 Team 支持时换 Team，不要删 entitlement 绕过。
+5. 连接 iPhone（信任电脑，按提示开启开发者模式），选设备后 Product → Build，再 Run；首次运行可能需在 设置 → 通用 → VPN 与设备管理 信任开发者。
+6. App 内填自己的 HTTPS 地址并登录控制台，逐项授权，先同步一项小样本核对记录、时间与单位，再扩大范围。
+
+服务端要求 HTTPS、`OBSERVABILITY_COOKIE_SECURE=true`；设备副本默认落在 `DEVICE_DATA_STORE_DIR`（`runtime/server/device-data/`，0700/0600，与观测、聊天、memory 分离，不进入默认 pi 上下文）。反向代理按 `conf/nginx-observability.locations.conf` 为 `/api/observability/v1/device-data/` 放行 256KiB，并屏蔽 `/internal/device-data/`。文件权限不是磁盘加密，备份与同机其他进程仍以信任部署主机为前提。
+
+仓库不提供预签名 App 或 TestFlight 包，也无法替代真机验证：模拟器构建不覆盖健康授权、事件权限和签名限制。数据范围、接口、验收清单见 [iOS 文档](docs/ios.md)。
 
 ## 配置与本地规则
 

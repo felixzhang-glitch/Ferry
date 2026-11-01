@@ -405,8 +405,21 @@ textarea { font: inherit; color: var(--ink); }
 .workspace[data-view="chat"] .topbar { display: none; }
 .workspace[data-view="chat"] main { display: flex; flex: 1; min-height: 0; max-width: none; padding-top: 16px; padding-bottom: 16px; }
 .workspace[data-view="chat"] footer { display: none; }
-.chat-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 18px; width: 100%; min-height: 0; }
-.chat-threads { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); padding-right: 14px; }
+.chat-layout { --chat-threads-w: 220px; --chat-threads-gap: 18px; --chat-main-pad: 32px; position: relative; display: grid; grid-template-columns: var(--chat-threads-w) minmax(0, 1fr); gap: var(--chat-threads-gap); width: 100%; min-height: 0; transition: grid-template-columns .2s ease, gap .2s ease; }
+.chat-threads { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); padding-right: 14px; overflow: hidden; transition: visibility .2s; }
+/* Children keep the open width so collapsing clips the list instead of reflowing it. */
+.chat-threads > * { min-width: calc(var(--chat-threads-w) - 15px); }
+.chat-layout[data-threads="collapsed"] { grid-template-columns: 0 minmax(0, 1fr); gap: 0; }
+.chat-layout[data-threads="collapsed"] .chat-threads { visibility: hidden; padding-right: 0; border-right-color: transparent; }
+/* Hover strip on the list edge; when collapsed it sits in main's left padding so it never covers the chat. */
+.chat-threads-rail { position: absolute; top: 0; bottom: 0; z-index: 3; left: var(--chat-threads-w); width: var(--chat-threads-gap); transform: translateX(-50%); }
+.chat-layout[data-threads="collapsed"] .chat-threads-rail { left: calc(var(--chat-main-pad) / -2); width: var(--chat-main-pad); }
+.chat-threads-rail::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%); background: var(--line-strong); opacity: 0; transition: opacity .15s; }
+.chat-threads-toggle { position: absolute; top: calc(50% - 14px); left: calc(50% - 14px); display: grid; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; border-radius: 50%; border: 1px solid var(--line-strong); background: var(--panel); color: var(--muted); box-shadow: var(--shadow-sm); opacity: 0; transition: opacity .15s, background-color .15s, color .15s, transform .1s; }
+.chat-threads-toggle .icon { width: 16px; height: 16px; transition: transform .2s; }
+.chat-layout:not([data-threads="collapsed"]) .chat-threads-toggle .icon { transform: rotate(180deg); }
+.chat-threads-toggle:hover { color: var(--ink); background: var(--panel-2); }
+.chat-threads-rail:hover::before, .chat-threads-rail:hover .chat-threads-toggle, .chat-threads:hover + .chat-threads-rail .chat-threads-toggle, .chat-threads-toggle:focus-visible { opacity: 1; }
 .chat-list-head { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 4px 0 8px; flex-shrink: 0; }
 .chat-threads .chat-list-head { justify-content: flex-start; }
 .chat-list-head button { font-size: 12px; min-height: 44px; padding: 6px 10px; }
@@ -427,6 +440,7 @@ textarea { font: inherit; color: var(--ink); }
 .chat-head .icon-button:hover, .chat-icon-button:hover { background: var(--panel-2); color: var(--ink); }
 .chat-icon-button .icon { width: 19px; height: 19px; }
 #chat-new-header, #chat-open-drawer { display: inline-grid; place-items: center; }
+@media (min-width: 901px) { #chat-open-drawer { display: none; } }
 .chat-notice { flex-shrink: 0; margin: 0; padding: 4px 4px 0; overflow-wrap: anywhere; }
 .chat-notice:empty { display: none; }
 .chat-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; overflow-anchor: none; padding: 12px 6px 16px; scrollbar-width: thin; }
@@ -473,6 +487,7 @@ textarea { font: inherit; color: var(--ink); }
 .chat-table-scroll th[data-align="right"], .chat-table-scroll td[data-align="right"] { text-align: right; }
 .chat-message-actions { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
 .chat-message-actions:empty { display: none; }
+.chat-message-actions .chat-copy { transform: translate(-4px, 2px); }
 .chat-message-attachment { display: grid; justify-items: start; gap: 5px; margin-top: 10px; max-width: 100%; }
 .chat-download { max-width: 100%; font-size: 12px; overflow-wrap: anywhere; text-align: left; }
 .chat-image { display: block; max-width: min(100%, 380px); max-height: 260px; object-fit: contain; border-radius: 12px; }
@@ -511,7 +526,7 @@ textarea { font: inherit; color: var(--ink); }
 .chat-drawer { width: min(340px, calc(100vw - 16px)); height: 100dvh; max-height: 100%; margin: 0 auto 0 0; border-radius: 0 18px 18px 0; padding: max(16px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); }
 .chat-drawer[open] { display: flex; flex-direction: column; gap: 8px; }
 @media (max-width: 1100px) and (min-width: 901px) {
-  .chat-layout { grid-template-columns: 180px minmax(0, 1fr); gap: 12px; }
+  .chat-layout { --chat-threads-w: 180px; --chat-threads-gap: 12px; --chat-main-pad: 20px; }
   .workspace[data-view="chat"] main { padding-left: 20px; padding-right: 20px; }
   #chat-input-help { display: none; }
 }
@@ -520,9 +535,9 @@ html.chat-viewport, html.chat-viewport body { height: 100%; overflow: hidden; ov
   .workspace[data-view="chat"].chat-mobile { position: fixed; top: var(--chat-offset-top, 0px); left: 0; right: 0; width: 100%; height: var(--chat-vh, 100dvh); }
   .workspace[data-view="chat"].chat-mobile .tabbar { position: absolute; }
   .workspace[data-view="chat"] .content { height: 100%; }
-  .workspace[data-view="chat"] main { padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 8px max(8px, env(safe-area-inset-left)); }
-  .chat-layout { grid-template-columns: minmax(0, 1fr); }
-  .chat-threads { display: none; }
+  .workspace[data-view="chat"] main { padding: calc(10px + env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 8px max(8px, env(safe-area-inset-left)); }
+  .chat-layout, .chat-layout[data-threads="collapsed"] { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .chat-threads, .chat-threads-rail { display: none; }
   .chat-head h2 { font-size: 16px; }
   .chat-composer { display: grid; grid-template-columns: 44px minmax(0, 1fr) 52px; align-items: end; gap: 6px; padding: 6px; border-radius: 14px; }
   .chat-input-wrap { grid-column: 2; grid-row: 2; }
@@ -564,6 +579,13 @@ html.chat-viewport, html.chat-viewport body { height: 100%; overflow: hidden; ov
 .appearance-haptics { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; font-size: 14px; font-weight: 500; cursor: pointer; margin-top: 4px; }
 .appearance-haptics input { flex-shrink: 0; width: 44px; height: 28px; min-width: 24px; min-height: 24px; padding: 0; accent-color: var(--accent); }
 .appearance-test { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+/* iOS haptics: a transparent label covers each primary action and forwards the real tap to a hidden
+   native switch. The switch never sits under the finger, so scrolling from a button still works. */
+.haptic-host { position: relative; }
+html label.haptic-overlay { display: none; position: absolute; inset: 0; margin: 0; padding: 0; border-radius: inherit; background: none; cursor: inherit; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+html[data-haptics="on"] label.haptic-overlay { display: block; }
+html :disabled > label.haptic-overlay, html [aria-disabled="true"] > label.haptic-overlay { display: none; }
+html label.haptic-overlay > input[switch] { position: absolute; top: 0; left: 0; width: 1px; height: 1px; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; visibility: hidden; pointer-events: none; }
 .appearance-test button { min-height: 36px; font-size: 12px; }
 .appearance-panel .actions { margin-top: 14px; }
 .appearance-reset-confirm { margin-top: 14px; padding: 14px; background: var(--danger-soft); border-radius: var(--r-control); }
